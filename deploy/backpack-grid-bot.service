@@ -1,0 +1,27 @@
+[Unit]
+Description=Backpack Grid Trading Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/backpack-grid-bot
+Environment=NODE_ENV=production
+Environment=GRID_DB_PATH=/var/lib/backpack-grid-bot/backpack-grid-bot-bot.sqlite
+Environment=GRID_SERVICE_NAME=backpack-grid-bot-prod
+EnvironmentFile=-/etc/backpack-grid-bot/backpack-grid-bot.env
+ExecStart=/usr/bin/node /opt/backpack-grid-bot/dist/index.js demo
+Restart=on-failure
+RestartSec=5
+User=backpack-grid-bot
+Group=backpack-grid-bot
+UMask=007
+StateDirectory=backpack-grid-bot
+ReadWritePaths=/var/lib/backpack-grid-bot
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
