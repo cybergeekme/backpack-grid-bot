@@ -28,6 +28,7 @@ A production-oriented TypeScript skeleton for a futures grid trading service.
 - Out-of-range price moves pause grid placement instead of blindly chasing price.
 - Consecutive loop failures trip a circuit breaker into `SAFE_MODE`; reconciliation continues but new rebalances stop.
 - Periodic REST reconciliation refreshes orders/position even while paused or degraded.
+- Optional Telegram alerting can page operators for lifecycle/state changes, circuit breaker trips, out-of-range pauses, reconciliation mismatches, and fills.
 - WebSocket connection attempts inherit the same live-trading safety gate and degrade back to REST-only if WS connect fails.
 - Backpack integration currently covers authenticated REST calls for balances, open orders, single-position lookup, order placement/cancel, public mark prices, and typed WS normalization scaffolding for order/position/fill updates.
 - Persistence now covers local runtime snapshots and checkpoints, but live-trading replay logic after partial exchange disconnects is still incomplete.
@@ -61,6 +62,12 @@ Optional:
 - `GRID_SERVICE_OUT_OF_RANGE_BPS=75` pause buffer beyond the last active grid before new orders are suppressed
 - `GRID_SERVICE_DRY_RUN_MS=0` optional auto-stop timer for service dry runs
 - `GRID_MOCK_PRICE_STEP=100` mock-service price step used only in mock service mode
+- `TELEGRAM_ALERTS_ENABLED=true` enable Telegram operator alerts
+- `TELEGRAM_BOT_TOKEN=<bot token>` Telegram Bot API token
+- `TELEGRAM_CHAT_ID=<chat id>` Telegram target chat/channel/user id
+- `TELEGRAM_ALERT_LEVEL=warn` minimum severity to send: `info`, `warn`, `critical`
+- `TELEGRAM_ALERT_DEDUP_MS=300000` per-alert dedup window in milliseconds
+- `TELEGRAM_NOTIFY_FILLS=false` set true to send fill notifications in addition to safety alerts
 - `BACKPACK_ENABLE_LIVE=true` to actually allow authenticated Backpack calls
 - `BACKPACK_ENABLE_WS=true` to enable the Backpack WS client when live mode is enabled (default: true)
 - `BACKPACK_API_KEY=<base64 public key>`
@@ -119,6 +126,12 @@ GRID_SERVICE_LOOP_MS=15000
 GRID_SERVICE_RECONCILE_MS=60000
 GRID_SERVICE_ERROR_THRESHOLD=3
 GRID_SERVICE_OUT_OF_RANGE_BPS=75
+# TELEGRAM_ALERTS_ENABLED=true
+# TELEGRAM_BOT_TOKEN=123456:telegram-bot-token
+# TELEGRAM_CHAT_ID=123456789
+# TELEGRAM_ALERT_LEVEL=warn
+# TELEGRAM_ALERT_DEDUP_MS=300000
+# TELEGRAM_NOTIFY_FILLS=false
 # GRID_USE_BACKPACK=true
 # BACKPACK_ENABLE_LIVE=true
 # BACKPACK_API_KEY=...
@@ -134,6 +147,8 @@ Notes:
 
 - The included unit uses `StateDirectory=backpack-grid-bot` and writes the SQLite DB under `/var/lib/backpack-grid-bot`.
 - The `service` entrypoint is the intended long-running mode; use `GRID_SERVICE_DRY_RUN_MS` for supervised smoke tests.
+- Telegram alert delivery is fire-and-forget; send failures are logged but do not stop the trading loop.
+- If `TELEGRAM_ALERTS_ENABLED=true` but token/chat id are missing or wrong, alerts will be skipped or logged as delivery failures rather than crashing the service.
 - If you enable live mode, keep the env file readable only by root and the service account.
 - Treat `SAFE_MODE` and repeated `PAUSED` logs as operator-review conditions, not something to auto-ignore.
 
@@ -156,6 +171,6 @@ Before using with real funds, you should still add:
 - reconnect/backoff and ping/pong supervision
 - sequence-aware replay + REST catch-up after disconnects
 - stronger response validation against live payloads
-- explicit operator alert routing (Telegram/Discord/Pager) instead of log-only warnings
+- additional alert sinks (Discord/PagerDuty/etc.) if Telegram alone is not enough for operations
 - cancel-on-pause / flatten-on-safe-mode policies after live validation proves the right behavior
 - sandbox/small-size validation against your Backpack subaccount

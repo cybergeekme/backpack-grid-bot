@@ -9,6 +9,8 @@ WorkingDirectory=/opt/backpack-grid-bot
 Environment=NODE_ENV=production
 Environment=GRID_DB_PATH=/var/lib/backpack-grid-bot/backpack-grid-bot.sqlite
 Environment=GRID_SERVICE_NAME=backpack-grid-bot-prod
+# Put secrets and operator alert routing in /etc/backpack-grid-bot/backpack-grid-bot.env,
+# e.g. TELEGRAM_ALERTS_ENABLED / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID.
 EnvironmentFile=-/etc/backpack-grid-bot/backpack-grid-bot.env
 ExecStart=/usr/bin/node /opt/backpack-grid-bot/dist/index.js service
 Restart=on-failure

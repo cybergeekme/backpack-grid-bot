@@ -1,5 +1,6 @@
 import { BackpackFuturesAdapter } from './adapters/backpackAdapter';
 import { MockExchangeAdapter } from './adapters/mockExchangeAdapter';
+import { AlertManager, TelegramNotifier, type AlertSink } from './alerts';
 import { loadConfig } from './config';
 import { GridTradingService } from './service/gridService';
 import { ServiceRunner } from './service/serviceRunner';
@@ -17,10 +18,44 @@ function createAdapter(config: ReturnType<typeof loadConfig>) {
     : new MockExchangeAdapter(100_000, config.symbol);
 }
 
+function createAlertManager(config: ReturnType<typeof loadConfig>): AlertManager | undefined {
+  const sinks: AlertSink[] = [];
+  if (config.telegramAlertsEnabled && config.telegramBotToken && config.telegramChatId) {
+    sinks.push(
+      new TelegramNotifier({
+        botToken: config.telegramBotToken,
+        chatId: config.telegramChatId,
+        serviceName: config.serviceName
+      })
+    );
+  }
+
+  if (!config.telegramAlertsEnabled || sinks.length === 0) {
+    return new AlertManager(
+      {
+        enabled: false,
+        minSeverity: config.telegramAlertLevel,
+        dedupMs: config.telegramAlertDedupMs
+      },
+      sinks
+    );
+  }
+
+  return new AlertManager(
+    {
+      enabled: true,
+      minSeverity: config.telegramAlertLevel,
+      dedupMs: config.telegramAlertDedupMs
+    },
+    sinks
+  );
+}
+
 async function demo(): Promise<void> {
   const config = loadConfig();
   const adapter = createAdapter(config);
-  const service = new GridTradingService(config, adapter);
+  const alerts = createAlertManager(config);
+  const service = new GridTradingService(config, adapter, alerts);
   await service.start();
   await service.rebalance();
 
@@ -38,7 +73,8 @@ async function demo(): Promise<void> {
 async function serviceCommand(): Promise<void> {
   const config = loadConfig();
   const adapter = createAdapter(config);
-  const service = new GridTradingService(config, adapter);
+  const alerts = createAlertManager(config);
+  const service = new GridTradingService(config, adapter, alerts);
   let tickDirection = 1;
   const runner = new ServiceRunner(config, service, {
     onMockTick: adapter instanceof MockExchangeAdapter
@@ -49,7 +85,7 @@ async function serviceCommand(): Promise<void> {
           adapter.movePrice(next);
         }
       : undefined
-  });
+  }, alerts);
 
   const shutdown = async (signal: string) => {
     console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', scope: 'CLI', message: 'Shutdown requested.', signal }));

@@ -22,6 +22,12 @@ export interface AppConfig {
   serviceConsecutiveErrorThreshold: number;
   serviceOutOfRangePauseBps: number;
   serviceMockPriceStep: number;
+  telegramAlertsEnabled: boolean;
+  telegramBotToken?: string;
+  telegramChatId?: string;
+  telegramAlertLevel: 'info' | 'warn' | 'critical';
+  telegramAlertDedupMs: number;
+  telegramNotifyFills: boolean;
 }
 
 function num(name: string, fallback: number): number {
@@ -38,6 +44,13 @@ function bool(name: string, fallback = false): boolean {
   const raw = process.env[name];
   if (!raw) return fallback;
   return ['1', 'true', 'yes', 'on'].includes(raw.toLowerCase());
+}
+
+function alertLevel(name: string, fallback: 'info' | 'warn' | 'critical'): 'info' | 'warn' | 'critical' {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  if (raw === 'info' || raw === 'warn' || raw === 'critical') return raw;
+  throw new Error(`Invalid alert level env ${name}=${raw}`);
 }
 
 export function loadConfig(): AppConfig {
@@ -64,6 +77,12 @@ export function loadConfig(): AppConfig {
     serviceReconcileIntervalMs: Math.max(1_000, Math.floor(num('GRID_SERVICE_RECONCILE_MS', 60_000))),
     serviceConsecutiveErrorThreshold: Math.max(1, Math.floor(num('GRID_SERVICE_ERROR_THRESHOLD', 3))),
     serviceOutOfRangePauseBps: Math.max(1, num('GRID_SERVICE_OUT_OF_RANGE_BPS', 75)),
-    serviceMockPriceStep: Math.max(0.01, num('GRID_MOCK_PRICE_STEP', 100))
+    serviceMockPriceStep: Math.max(0.01, num('GRID_MOCK_PRICE_STEP', 100)),
+    telegramAlertsEnabled: bool('TELEGRAM_ALERTS_ENABLED', false),
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+    telegramChatId: process.env.TELEGRAM_CHAT_ID,
+    telegramAlertLevel: alertLevel('TELEGRAM_ALERT_LEVEL', 'warn'),
+    telegramAlertDedupMs: Math.max(0, Math.floor(num('TELEGRAM_ALERT_DEDUP_MS', 300000))),
+    telegramNotifyFills: bool('TELEGRAM_NOTIFY_FILLS', false)
   };
 }

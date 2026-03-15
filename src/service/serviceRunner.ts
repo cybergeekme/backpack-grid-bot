@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
 import type { AppConfig } from '../config';
+import { AlertManager } from '../alerts';
 import { Logger } from '../logger';
 import { GridTradingService } from './gridService';
 
@@ -32,7 +33,8 @@ export class ServiceRunner {
   constructor(
     private readonly config: AppConfig,
     private readonly service: GridTradingService,
-    private readonly hooks: { onMockTick?: () => void } = {}
+    private readonly hooks: { onMockTick?: () => void } = {},
+    private readonly alerts?: AlertManager
   ) {}
 
   async start(): Promise<void> {
@@ -154,13 +156,25 @@ export class ServiceRunner {
       this.status.state = state;
       return;
     }
+    const previousState = this.state;
     this.state = state;
     this.status.state = state;
-    const payload = { state, ...data };
+    const payload = { state, previousState, ...data };
     if (state === 'ACTIVE' || state === 'STOPPED') {
       this.logger.info('Service state changed.', payload);
-      return;
+    } else {
+      this.logger.warn('Service state changed.', payload);
     }
-    this.logger.warn('Service state changed.', payload);
+
+    if (this.alerts) {
+      const severity = state === 'SAFE_MODE' ? 'critical' : state === 'DEGRADED' || state === 'PAUSED' ? 'warn' : 'info';
+      void this.alerts.notify({
+        key: `service-state:${state}`,
+        severity,
+        title: `Service state: ${state}`,
+        message: `Service transitioned from ${previousState} to ${state}.`,
+        details: payload
+      });
+    }
   }
 }

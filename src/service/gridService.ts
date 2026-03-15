@@ -1,5 +1,6 @@
 import type { AppConfig } from '../config';
 import { Logger } from '../logger';
+import { AlertManager } from '../alerts';
 import { OrderManager } from '../oms/orderManager';
 import { SqlitePersistence } from '../persistence/sqliteStore';
 import { RiskEngine } from '../risk/riskEngine';
@@ -33,7 +34,8 @@ export class GridTradingService {
 
   constructor(
     private readonly config: AppConfig,
-    private readonly adapter: ExchangeAdapter
+    private readonly adapter: ExchangeAdapter,
+    private readonly alerts?: AlertManager
   ) {
     this.risk = new RiskEngine(config);
     this.strategy = new GridStrategyEngine(config);
@@ -68,6 +70,17 @@ export class GridTradingService {
         symbol: this.config.symbol,
         midPrice,
         pauseReason: this.runtimeHealth.pauseReason
+      });
+      this.emitAlert({
+        key: `pause:${this.config.symbol}:${this.runtimeHealth.pauseReason ?? 'unknown'}`,
+        severity: 'warn',
+        title: 'Grid paused: price out of range',
+        message: 'Rebalance skipped because mid price moved outside the configured grid buffer.',
+        details: {
+          symbol: this.config.symbol,
+          midPrice,
+          pauseReason: this.runtimeHealth.pauseReason
+        }
       });
       return;
     }
@@ -119,6 +132,20 @@ export class GridTradingService {
       ts: Date.now()
     };
     this.persistence.persistReconciliation(reconciliationEvent);
+    if (reconciliationEvent.missingOnExchange.length > 0 || reconciliationEvent.unexpectedOnExchange.length > 0) {
+      this.emitAlert({
+        key: `reconciliation:${this.config.symbol}`,
+        severity: 'warn',
+        title: 'Order reconciliation mismatch',
+        message: 'Exchange open orders diverged from the desired grid set.',
+        details: {
+          symbol: this.config.symbol,
+          matched: reconciliationEvent.matched,
+          missingOnExchange: reconciliationEvent.missingOnExchange.length,
+          unexpectedOnExchange: reconciliationEvent.unexpectedOnExchange.length
+        }
+      });
+    }
     const balance = await this.adapter.getBalance(this.config.quoteAsset);
     const refreshedPosition = await this.adapter.getPosition(this.config.symbol);
     this.state.setPosition(refreshedPosition);
@@ -190,10 +217,21 @@ export class GridTradingService {
   }
 
   private updatePauseHealth(snapshot: { levels: { price: number }[] } | undefined, midPrice: number): void {
+    const wasPaused = this.runtimeHealth.pauseRequested;
+    const priorReason = this.runtimeHealth.pauseReason;
     if (!snapshot || snapshot.levels.length === 0) {
       this.runtimeHealth.pauseRequested = false;
       this.runtimeHealth.pauseReason = undefined;
       this.runtimeHealth.outOfRangeSinceTs = undefined;
+      if (wasPaused) {
+        this.emitAlert({
+          key: `pause-cleared:${this.config.symbol}`,
+          severity: 'info',
+          title: 'Grid pause cleared',
+          message: 'Service resumed normal grid eligibility after price moved back into range.',
+          details: { symbol: this.config.symbol, midPrice, priorReason }
+        });
+      }
       return;
     }
     const prices = snapshot.levels.map((level) => level.price);
@@ -212,6 +250,15 @@ export class GridTradingService {
     this.runtimeHealth.pauseRequested = false;
     this.runtimeHealth.pauseReason = undefined;
     this.runtimeHealth.outOfRangeSinceTs = undefined;
+    if (wasPaused) {
+      this.emitAlert({
+        key: `pause-cleared:${this.config.symbol}`,
+        severity: 'info',
+        title: 'Grid pause cleared',
+        message: 'Service resumed normal grid eligibility after price moved back into range.',
+        details: { symbol: this.config.symbol, midPrice, priorReason }
+      });
+    }
   }
 
   private handleAdapterEvent(event: AdapterEvent): void {
@@ -247,6 +294,23 @@ export class GridTradingService {
           qty: event.fill.qty,
           price: event.fill.price
         });
+        if (this.config.telegramNotifyFills) {
+          this.emitAlert({
+            key: `fill:${event.fill.orderId}:${event.fill.ts}`,
+            severity: 'info',
+            title: 'Order fill',
+            message: `${event.fill.side.toUpperCase()} fill recorded for ${event.fill.symbol}.`,
+            details: {
+              symbol: event.fill.symbol,
+              side: event.fill.side,
+              price: event.fill.price,
+              qty: event.fill.qty,
+              fee: event.fill.fee,
+              orderId: event.fill.orderId
+            },
+            dedupMs: 0
+          });
+        }
         return;
       case 'connection':
         this.persistence.persistCheckpoint('connection', { ...event, ts: Date.now() });
@@ -267,5 +331,10 @@ export class GridTradingService {
       ts: Date.now()
     };
     this.persistence.persistCheckpoint('runtime', checkpoint);
+  }
+
+  private emitAlert(event: Parameters<AlertManager['notify']>[0]): void {
+    if (!this.alerts) return;
+    void this.alerts.notify(event);
   }
 }

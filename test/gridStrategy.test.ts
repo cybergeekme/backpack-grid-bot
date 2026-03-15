@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { AlertManager, type AlertEvent } from '../src/alerts';
 import { loadConfig } from '../src/config';
 import { OrderManager } from '../src/oms/orderManager';
 import { OrderReconciliation } from '../src/oms/reconciliation';
@@ -211,6 +212,25 @@ test('service runner enters SAFE_MODE after consecutive errors', async () => {
 
   assert.equal(runner.snapshot().state, 'STOPPED');
   assert.equal(runner.snapshot().safeModeReason, 'consecutive_error_threshold:1');
+});
+
+test('alert manager deduplicates repeated events and swallows sink failures', async () => {
+  const delivered: AlertEvent[] = [];
+  const manager = new AlertManager(
+    { enabled: true, minSeverity: 'info', dedupMs: 60_000 },
+    [
+      { notify: async (event) => void delivered.push(event) },
+      { notify: async () => { throw new Error('synthetic notifier failure'); } }
+    ]
+  );
+
+  await manager.notify({ key: 'same-key', severity: 'warn', title: 'A', message: 'first' });
+  await manager.notify({ key: 'same-key', severity: 'warn', title: 'A', message: 'second' });
+  await manager.notify({ key: 'other-key', severity: 'warn', title: 'B', message: 'third' });
+
+  assert.equal(delivered.length, 2);
+  assert.equal(delivered[0]?.message, 'first');
+  assert.equal(delivered[1]?.key, 'other-key');
 });
 
 test('service recovers persisted snapshot, fills, and mock adapter checkpoint on restart', async () => {
