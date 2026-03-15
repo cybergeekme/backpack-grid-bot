@@ -47,7 +47,7 @@ Optional:
 - `GRID_MAX_POSITION_ABS` (default: `0.05`)
 - `GRID_KILL_SWITCH=true` to force strategy shutdown
 - `GRID_USE_BACKPACK=true` to switch from mock exchange to Backpack REST adapter
-- `GRID_DB_PATH=./var/backpack-grid-bot-bot.sqlite` SQLite database path for persistent state
+- `GRID_DB_PATH=./var/backpack-grid-bot.sqlite` SQLite database path for persistent state
 - `GRID_SERVICE_NAME=backpack-grid-bot` logical service name used to partition persisted rows
 - `BACKPACK_ENABLE_LIVE=true` to actually allow authenticated Backpack calls
 - `BACKPACK_ENABLE_WS=true` to enable the Backpack WS client when live mode is enabled (default: true)
@@ -79,7 +79,7 @@ SQLite is opened in WAL mode with `synchronous=NORMAL` for a decent durability/l
 
 ## Deployment with systemd
 
-Example unit: `deploy/backpack-grid-bot-bot.service`
+Example unit: `deploy/backpack-grid-bot.service`
 
 Suggested layout on Ubuntu 24.04:
 
@@ -93,14 +93,14 @@ cd /opt/backpack-grid-bot
 npm ci
 npm run build
 
-sudo cp deploy/backpack-grid-bot-bot.service /etc/systemd/system/backpack-grid-bot-bot.service
+sudo cp deploy/backpack-grid-bot.service /etc/systemd/system/backpack-grid-bot.service
 sudo tee /etc/backpack-grid-bot/backpack-grid-bot.env >/dev/null <<'EOF'
 GRID_SYMBOL=BTC_USDC_PERP
 GRID_LEVELS=3
 GRID_SPACING_BPS=50
 GRID_ORDER_SIZE=0.01
 GRID_MAX_POSITION_ABS=0.05
-GRID_DB_PATH=/var/lib/backpack-grid-bot/backpack-grid-bot-bot.sqlite
+GRID_DB_PATH=/var/lib/backpack-grid-bot/backpack-grid-bot.sqlite
 GRID_SERVICE_NAME=backpack-grid-bot-prod
 # GRID_USE_BACKPACK=true
 # BACKPACK_ENABLE_LIVE=true
@@ -109,8 +109,8 @@ GRID_SERVICE_NAME=backpack-grid-bot-prod
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now backpack-grid-bot-bot.service
-sudo systemctl status backpack-grid-bot-bot.service
+sudo systemctl enable --now backpack-grid-bot.service
+sudo systemctl status backpack-grid-bot.service
 ```
 
 Notes:

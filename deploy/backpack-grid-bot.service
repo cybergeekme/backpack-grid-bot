@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/backpack-grid-bot
 Environment=NODE_ENV=production
-Environment=GRID_DB_PATH=/var/lib/backpack-grid-bot/backpack-grid-bot-bot.sqlite
+Environment=GRID_DB_PATH=/var/lib/backpack-grid-bot/backpack-grid-bot.sqlite
 Environment=GRID_SERVICE_NAME=backpack-grid-bot-prod
 EnvironmentFile=-/etc/backpack-grid-bot/backpack-grid-bot.env
 ExecStart=/usr/bin/node /opt/backpack-grid-bot/dist/index.js demo

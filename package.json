@@ -1,5 +1,5 @@
 {
-  "name": "backpack-grid-bot-bot",
+  "name": "backpack-grid-bot",
   "version": "0.1.0",
   "private": true,
   "description": "Production-oriented v1 skeleton for a Backpack futures grid trading service with local simulation.",

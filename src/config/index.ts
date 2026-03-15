@@ -53,7 +53,7 @@ export function loadConfig(): AppConfig {
     backpackApiKey: process.env.BACKPACK_API_KEY,
     backpackApiSecret: process.env.BACKPACK_API_SECRET,
     backpackWindowMs: Math.max(1, Math.min(60_000, Math.floor(num('BACKPACK_WINDOW_MS', 5000)))),
-    persistencePath: process.env.GRID_DB_PATH ?? path.resolve(process.cwd(), 'var/backpack-grid-bot-bot.sqlite'),
+    persistencePath: process.env.GRID_DB_PATH ?? path.resolve(process.cwd(), 'var/backpack-grid-bot.sqlite'),
     serviceName: process.env.GRID_SERVICE_NAME ?? 'backpack-grid-bot'
   };
 }
