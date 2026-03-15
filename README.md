@@ -49,7 +49,7 @@ Use `.env.example` for local development, and `deploy/backpack-grid-bot.env.exam
 
 Optional:
 
-- `GRID_SYMBOL` (default: `BTC_USDC_PERP`)
+- `GRID_SYMBOL` (default: `ETH_USDC_PERP`)
 - `GRID_LEVELS` (default: `3`)
 - `GRID_SPACING_BPS` (default: `50`)
 - `GRID_ORDER_SIZE` (default: `0.01`)

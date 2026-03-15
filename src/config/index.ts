@@ -58,7 +58,7 @@ export function loadConfig(): AppConfig {
   const env = envRaw === 'production' ? 'prod' : envRaw === 'test' ? 'test' : 'dev';
   return {
     env,
-    symbol: process.env.GRID_SYMBOL ?? 'BTC_USDC_PERP',
+    symbol: process.env.GRID_SYMBOL ?? 'ETH_USDC_PERP',
     levels: Math.max(1, Math.floor(num('GRID_LEVELS', 3))),
     spacingBps: num('GRID_SPACING_BPS', 50),
     orderSize: num('GRID_ORDER_SIZE', 0.01),
