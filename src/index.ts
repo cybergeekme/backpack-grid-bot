@@ -2,8 +2,11 @@ import { BackpackFuturesAdapter } from './adapters/backpackAdapter';
 import { MockExchangeAdapter } from './adapters/mockExchangeAdapter';
 import { AlertManager, TelegramNotifier, type AlertSink } from './alerts';
 import { loadConfig } from './config';
+import { loadDotEnvIfPresent } from './env';
 import { GridTradingService } from './service/gridService';
 import { ServiceRunner } from './service/serviceRunner';
+
+loadDotEnvIfPresent();
 
 function createAdapter(config: ReturnType<typeof loadConfig>) {
   return config.useBackpack
