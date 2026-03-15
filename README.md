@@ -45,6 +45,8 @@ GRID_SERVICE_DRY_RUN_MS=45000 npm run service
 
 ## Environment
 
+Use `.env.example` for local development, and `deploy/backpack-grid-bot.env.example` as the template for `/etc/backpack-grid-bot/backpack-grid-bot.env` in production.
+
 Optional:
 
 - `GRID_SYMBOL` (default: `BTC_USDC_PERP`)
@@ -114,29 +116,9 @@ npm run build
 GRID_SERVICE_DRY_RUN_MS=45000 npm run service   # optional dry run before enabling the unit
 
 sudo cp deploy/backpack-grid-bot.service /etc/systemd/system/backpack-grid-bot.service
-sudo tee /etc/backpack-grid-bot/backpack-grid-bot.env >/dev/null <<'EOF'
-GRID_SYMBOL=BTC_USDC_PERP
-GRID_LEVELS=3
-GRID_SPACING_BPS=50
-GRID_ORDER_SIZE=0.01
-GRID_MAX_POSITION_ABS=0.05
-GRID_DB_PATH=/var/lib/backpack-grid-bot/backpack-grid-bot.sqlite
-GRID_SERVICE_NAME=backpack-grid-bot-prod
-GRID_SERVICE_LOOP_MS=15000
-GRID_SERVICE_RECONCILE_MS=60000
-GRID_SERVICE_ERROR_THRESHOLD=3
-GRID_SERVICE_OUT_OF_RANGE_BPS=75
-# TELEGRAM_ALERTS_ENABLED=true
-# TELEGRAM_BOT_TOKEN=123456:telegram-bot-token
-# TELEGRAM_CHAT_ID=123456789
-# TELEGRAM_ALERT_LEVEL=warn
-# TELEGRAM_ALERT_DEDUP_MS=300000
-# TELEGRAM_NOTIFY_FILLS=false
-# GRID_USE_BACKPACK=true
-# BACKPACK_ENABLE_LIVE=true
-# BACKPACK_API_KEY=...
-# BACKPACK_API_SECRET=...
-EOF
+sudo cp deploy/backpack-grid-bot.env.example /etc/backpack-grid-bot/backpack-grid-bot.env
+sudo chmod 600 /etc/backpack-grid-bot/backpack-grid-bot.env
+sudo ${EDITOR:-vi} /etc/backpack-grid-bot/backpack-grid-bot.env
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now backpack-grid-bot.service
