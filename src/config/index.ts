@@ -17,6 +17,11 @@ export interface AppConfig {
   backpackWindowMs: number;
   persistencePath: string;
   serviceName: string;
+  serviceLoopIntervalMs: number;
+  serviceReconcileIntervalMs: number;
+  serviceConsecutiveErrorThreshold: number;
+  serviceOutOfRangePauseBps: number;
+  serviceMockPriceStep: number;
 }
 
 function num(name: string, fallback: number): number {
@@ -54,6 +59,11 @@ export function loadConfig(): AppConfig {
     backpackApiSecret: process.env.BACKPACK_API_SECRET,
     backpackWindowMs: Math.max(1, Math.min(60_000, Math.floor(num('BACKPACK_WINDOW_MS', 5000)))),
     persistencePath: process.env.GRID_DB_PATH ?? path.resolve(process.cwd(), 'var/backpack-grid-bot.sqlite'),
-    serviceName: process.env.GRID_SERVICE_NAME ?? 'backpack-grid-bot'
+    serviceName: process.env.GRID_SERVICE_NAME ?? 'backpack-grid-bot',
+    serviceLoopIntervalMs: Math.max(250, Math.floor(num('GRID_SERVICE_LOOP_MS', 15_000))),
+    serviceReconcileIntervalMs: Math.max(1_000, Math.floor(num('GRID_SERVICE_RECONCILE_MS', 60_000))),
+    serviceConsecutiveErrorThreshold: Math.max(1, Math.floor(num('GRID_SERVICE_ERROR_THRESHOLD', 3))),
+    serviceOutOfRangePauseBps: Math.max(1, num('GRID_SERVICE_OUT_OF_RANGE_BPS', 75)),
+    serviceMockPriceStep: Math.max(0.01, num('GRID_MOCK_PRICE_STEP', 100))
   };
 }

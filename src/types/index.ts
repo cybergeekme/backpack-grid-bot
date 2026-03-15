@@ -105,7 +105,16 @@ export interface RuntimeCheckpoint {
   reason: string;
   state: RuntimeState;
   adapter?: unknown;
+  health?: ServiceRuntimeHealth;
   ts: number;
+}
+
+export interface ServiceRuntimeHealth {
+  pauseRequested: boolean;
+  pauseReason?: string;
+  outOfRangeSinceTs?: number;
+  lastMidPrice?: number;
+  lastReconciliationTs?: number;
 }
 
 export interface CheckpointCapableAdapter {

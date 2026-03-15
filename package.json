@@ -9,7 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "demo": "tsx src/index.ts demo",
-    "start": "node dist/index.js demo",
+    "service": "tsx src/index.ts service",
+    "start": "node dist/index.js service",
     "test": "node --test --import tsx test/**/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

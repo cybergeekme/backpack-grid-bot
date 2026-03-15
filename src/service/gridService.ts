@@ -12,7 +12,8 @@ import type {
   OrderRequest,
   ReconciliationEvent,
   RiskEvent,
-  RuntimeCheckpoint
+  RuntimeCheckpoint,
+  ServiceRuntimeHealth
 } from '../types';
 
 function hasCheckpointSupport(adapter: ExchangeAdapter): adapter is ExchangeAdapter & CheckpointCapableAdapter {
@@ -28,6 +29,7 @@ export class GridTradingService {
   private readonly state = new InMemoryStateStore();
   private readonly persistence: SqlitePersistence;
   private unsubscribeAdapterEvents?: () => void;
+  private runtimeHealth: ServiceRuntimeHealth = { pauseRequested: false };
 
   constructor(
     private readonly config: AppConfig,
@@ -55,8 +57,20 @@ export class GridTradingService {
   }
 
   async rebalance(): Promise<void> {
+    const priorSnapshot = this.state.get().snapshot;
     const midPrice = await this.adapter.markPrice(this.config.symbol);
+    this.runtimeHealth.lastMidPrice = midPrice;
+    this.updatePauseHealth(priorSnapshot, midPrice);
     const snapshot = this.strategy.buildGrid(midPrice);
+    if (this.runtimeHealth.pauseRequested) {
+      this.persistRuntimeCheckpoint('rebalance_paused_out_of_range');
+      this.logger.warn('Skipping order sync because market moved outside configured grid range.', {
+        symbol: this.config.symbol,
+        midPrice,
+        pauseReason: this.runtimeHealth.pauseReason
+      });
+      return;
+    }
     this.state.setSnapshot(snapshot);
     this.persistence.persistSnapshot(snapshot);
 
@@ -125,9 +139,35 @@ export class GridTradingService {
     return this.state.get();
   }
 
+  getRuntimeHealth(): ServiceRuntimeHealth {
+    return { ...this.runtimeHealth };
+  }
+
+  async reconcileWithExchange(): Promise<void> {
+    const currentSnapshot = this.state.get().snapshot;
+    const midPrice = await this.adapter.markPrice(this.config.symbol);
+    this.runtimeHealth.lastMidPrice = midPrice;
+    this.updatePauseHealth(currentSnapshot, midPrice);
+    const orders = await this.adapter.getOpenOrders(this.config.symbol);
+    const position = await this.adapter.getPosition(this.config.symbol);
+    this.state.setWorkingOrders(orders);
+    this.state.setPosition(position);
+    this.oms.applyPositionUpdate(position);
+    this.persistence.persistOrders(orders);
+    this.persistence.persistPosition(position);
+    this.runtimeHealth.lastReconciliationTs = Date.now();
+    this.persistRuntimeCheckpoint('rest_reconcile');
+    this.logger.info('REST reconciliation complete.', {
+      symbol: this.config.symbol,
+      openOrders: orders.length,
+      position: position.size
+    });
+  }
+
   private restorePersistedState(): void {
     const recovery = this.persistence.loadLatestRecovery();
     const recovered = recovery.checkpoint?.state ?? recovery.state;
+    this.runtimeHealth = recovery.checkpoint?.health ?? { pauseRequested: false };
     this.state.restore(recovered);
     if (recovered.position) {
       this.oms.applyPositionUpdate(recovered.position);
@@ -147,6 +187,31 @@ export class GridTradingService {
         checkpointTs: recovery.checkpoint?.ts
       });
     }
+  }
+
+  private updatePauseHealth(snapshot: { levels: { price: number }[] } | undefined, midPrice: number): void {
+    if (!snapshot || snapshot.levels.length === 0) {
+      this.runtimeHealth.pauseRequested = false;
+      this.runtimeHealth.pauseReason = undefined;
+      this.runtimeHealth.outOfRangeSinceTs = undefined;
+      return;
+    }
+    const prices = snapshot.levels.map((level) => level.price);
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const bufferRatio = this.config.serviceOutOfRangePauseBps / 10_000;
+    const lower = minPrice * (1 - bufferRatio);
+    const upper = maxPrice * (1 + bufferRatio);
+    const outOfRange = midPrice < lower || midPrice > upper;
+    if (outOfRange) {
+      this.runtimeHealth.pauseRequested = true;
+      this.runtimeHealth.pauseReason = 'mid_price_out_of_grid_range';
+      this.runtimeHealth.outOfRangeSinceTs ??= Date.now();
+      return;
+    }
+    this.runtimeHealth.pauseRequested = false;
+    this.runtimeHealth.pauseReason = undefined;
+    this.runtimeHealth.outOfRangeSinceTs = undefined;
   }
 
   private handleAdapterEvent(event: AdapterEvent): void {
@@ -198,6 +263,7 @@ export class GridTradingService {
       reason,
       state: this.state.get(),
       adapter: hasCheckpointSupport(this.adapter) ? this.adapter.exportCheckpoint() : undefined,
+      health: this.runtimeHealth,
       ts: Date.now()
     };
     this.persistence.persistCheckpoint('runtime', checkpoint);

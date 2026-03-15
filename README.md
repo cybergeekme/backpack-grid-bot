@@ -15,14 +15,19 @@ A production-oriented TypeScript skeleton for a futures grid trading service.
 - SQLite persistence with WAL mode and schema initialization
 - Restart recovery for strategy snapshot, working orders, recent fills, position, and service checkpoints
 - Mock/demo adapter checkpoint restore so local restarts keep simulated state
-- Runnable demo simulation
+- Runnable mock demo simulation
+- Real long-running `service` mode with conservative safety states
 - Basic tests
 - systemd deployment example
 
 ## Safety
 
-- The demo uses only a mock exchange by default.
+- The demo and service both use only a mock exchange by default.
 - Backpack live mode is opt-in and hard-disabled unless `BACKPACK_ENABLE_LIVE=true` is set.
+- Service mode has explicit health states: `STARTING`, `ACTIVE`, `DEGRADED`, `PAUSED`, `SAFE_MODE`, `STOPPED`.
+- Out-of-range price moves pause grid placement instead of blindly chasing price.
+- Consecutive loop failures trip a circuit breaker into `SAFE_MODE`; reconciliation continues but new rebalances stop.
+- Periodic REST reconciliation refreshes orders/position even while paused or degraded.
 - WebSocket connection attempts inherit the same live-trading safety gate and degrade back to REST-only if WS connect fails.
 - Backpack integration currently covers authenticated REST calls for balances, open orders, single-position lookup, order placement/cancel, public mark prices, and typed WS normalization scaffolding for order/position/fill updates.
 - Persistence now covers local runtime snapshots and checkpoints, but live-trading replay logic after partial exchange disconnects is still incomplete.
@@ -34,6 +39,7 @@ npm install
 npm run test
 npm run build
 npm run demo
+GRID_SERVICE_DRY_RUN_MS=45000 npm run service
 ```
 
 ## Environment
@@ -49,6 +55,12 @@ Optional:
 - `GRID_USE_BACKPACK=true` to switch from mock exchange to Backpack REST adapter
 - `GRID_DB_PATH=./var/backpack-grid-bot.sqlite` SQLite database path for persistent state
 - `GRID_SERVICE_NAME=backpack-grid-bot` logical service name used to partition persisted rows
+- `GRID_SERVICE_LOOP_MS=15000` main service loop interval
+- `GRID_SERVICE_RECONCILE_MS=60000` periodic REST reconciliation interval
+- `GRID_SERVICE_ERROR_THRESHOLD=3` consecutive loop errors before SAFE_MODE
+- `GRID_SERVICE_OUT_OF_RANGE_BPS=75` pause buffer beyond the last active grid before new orders are suppressed
+- `GRID_SERVICE_DRY_RUN_MS=0` optional auto-stop timer for service dry runs
+- `GRID_MOCK_PRICE_STEP=100` mock-service price step used only in mock service mode
 - `BACKPACK_ENABLE_LIVE=true` to actually allow authenticated Backpack calls
 - `BACKPACK_ENABLE_WS=true` to enable the Backpack WS client when live mode is enabled (default: true)
 - `BACKPACK_API_KEY=<base64 public key>`
@@ -92,6 +104,7 @@ sudo chown -R backpack-grid-bot:backpack-grid-bot /opt/backpack-grid-bot /var/li
 cd /opt/backpack-grid-bot
 npm ci
 npm run build
+GRID_SERVICE_DRY_RUN_MS=45000 npm run service   # optional dry run before enabling the unit
 
 sudo cp deploy/backpack-grid-bot.service /etc/systemd/system/backpack-grid-bot.service
 sudo tee /etc/backpack-grid-bot/backpack-grid-bot.env >/dev/null <<'EOF'
@@ -102,6 +115,10 @@ GRID_ORDER_SIZE=0.01
 GRID_MAX_POSITION_ABS=0.05
 GRID_DB_PATH=/var/lib/backpack-grid-bot/backpack-grid-bot.sqlite
 GRID_SERVICE_NAME=backpack-grid-bot-prod
+GRID_SERVICE_LOOP_MS=15000
+GRID_SERVICE_RECONCILE_MS=60000
+GRID_SERVICE_ERROR_THRESHOLD=3
+GRID_SERVICE_OUT_OF_RANGE_BPS=75
 # GRID_USE_BACKPACK=true
 # BACKPACK_ENABLE_LIVE=true
 # BACKPACK_API_KEY=...
@@ -116,8 +133,9 @@ sudo systemctl status backpack-grid-bot.service
 Notes:
 
 - The included unit uses `StateDirectory=backpack-grid-bot` and writes the SQLite DB under `/var/lib/backpack-grid-bot`.
-- Replace the demo `ExecStart` command with your production entrypoint/loop once you add a long-running scheduler around `rebalance()`.
+- The `service` entrypoint is the intended long-running mode; use `GRID_SERVICE_DRY_RUN_MS` for supervised smoke tests.
 - If you enable live mode, keep the env file readable only by root and the service account.
+- Treat `SAFE_MODE` and repeated `PAUSED` logs as operator-review conditions, not something to auto-ignore.
 
 ## Backpack notes
 
@@ -137,6 +155,7 @@ Before using with real funds, you should still add:
 - validated Backpack WS auth/subscribe payloads against a live account capture
 - reconnect/backoff and ping/pong supervision
 - sequence-aware replay + REST catch-up after disconnects
-- a real long-running scheduling/worker loop instead of the current demo entrypoint
 - stronger response validation against live payloads
+- explicit operator alert routing (Telegram/Discord/Pager) instead of log-only warnings
+- cancel-on-pause / flatten-on-safe-mode policies after live validation proves the right behavior
 - sandbox/small-size validation against your Backpack subaccount

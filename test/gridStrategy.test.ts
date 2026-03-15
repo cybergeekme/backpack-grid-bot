@@ -9,6 +9,7 @@ import { OrderManager } from '../src/oms/orderManager';
 import { OrderReconciliation } from '../src/oms/reconciliation';
 import { RiskEngine } from '../src/risk/riskEngine';
 import { GridTradingService } from '../src/service/gridService';
+import { ServiceRunner } from '../src/service/serviceRunner';
 import { GridStrategyEngine } from '../src/strategy/gridStrategy';
 import type { Position } from '../src/types';
 import { MockExchangeAdapter } from '../src/adapters/mockExchangeAdapter';
@@ -151,6 +152,65 @@ test('order manager applies streamed order updates', async () => {
 
   oms.applyOrderUpdate({ ...order, status: 'filled', filledQty: order.qty });
   assert.equal(oms.getWorkingOrders().length, 0);
+});
+
+test('service pauses when price moves outside previous grid range', async () => {
+  process.env.GRID_LEVELS = '1';
+  process.env.GRID_SPACING_BPS = '50';
+  process.env.GRID_ORDER_SIZE = '0.01';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-pause');
+  process.env.GRID_SERVICE_NAME = 'grid-pause-test';
+  process.env.GRID_SERVICE_OUT_OF_RANGE_BPS = '10';
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(100, config.symbol, 10_000);
+  const service = new GridTradingService(config, adapter);
+  await service.start();
+  await service.rebalance();
+
+  adapter.movePrice(130);
+  await service.rebalance();
+
+  assert.equal(service.getRuntimeHealth().pauseRequested, true);
+  assert.equal(service.getRuntimeHealth().pauseReason, 'mid_price_out_of_grid_range');
+  await service.stop();
+});
+
+test('service runner enters SAFE_MODE after consecutive errors', async () => {
+  process.env.GRID_LEVELS = '1';
+  process.env.GRID_SPACING_BPS = '50';
+  process.env.GRID_ORDER_SIZE = '0.01';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-safe-mode');
+  process.env.GRID_SERVICE_NAME = 'grid-safe-mode-test';
+  process.env.GRID_SERVICE_LOOP_MS = '5';
+  process.env.GRID_SERVICE_RECONCILE_MS = '5';
+  process.env.GRID_SERVICE_ERROR_THRESHOLD = '1';
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(100, config.symbol, 10_000);
+  let throwsRemaining = 1;
+  const originalMarkPrice = adapter.markPrice.bind(adapter);
+  adapter.markPrice = async (symbol: string) => {
+    if (throwsRemaining > 0) {
+      throwsRemaining -= 1;
+      throw new Error('synthetic failure');
+    }
+    return originalMarkPrice(symbol);
+  };
+
+  const service = new GridTradingService(config, adapter);
+  const runner = new ServiceRunner(config, service);
+  const runPromise = runner.start();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  await runner.stop('test_done');
+  await runPromise;
+
+  assert.equal(runner.snapshot().state, 'STOPPED');
+  assert.equal(runner.snapshot().safeModeReason, 'consecutive_error_threshold:1');
 });
 
 test('service recovers persisted snapshot, fills, and mock adapter checkpoint on restart', async () => {
