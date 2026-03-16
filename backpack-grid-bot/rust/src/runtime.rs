@@ -40,6 +40,7 @@ impl ShadowRuntime {
         let report = ShadowReport::from_cycle(&self.config.symbol, &cycle);
         self.persistence.save_report(&report)?;
         self.persistence.append_events(&cycle, &self.config.symbol)?;
+        self.persistence.append_cycle_summary(&cycle, &self.config.symbol)?;
         Ok(cycle)
     }
 
@@ -49,7 +50,7 @@ impl ShadowRuntime {
             let cycle = self.run_once()?;
             let report = ShadowReport::from_cycle(&self.config.symbol, &cycle);
             println!(
-                "shadow symbol={} mark_price={} state={:?} pause_reason={:?} issues={:?} events={} desired={} cancels={} places={} matched={} synthetic_fill={} checkpoint={} report={} journal={}",
+                "shadow symbol={} mark_price={} state={:?} pause_reason={:?} issues={:?} events={} desired={} cancels={} places={} matched={} synthetic_fill={} checkpoint={} report={} journal={} cycles={}",
                 self.config.symbol,
                 cycle.state.last_mid_price.unwrap_or_default(),
                 cycle.state.health.service_state,
@@ -64,6 +65,7 @@ impl ShadowRuntime {
                 self.persistence.path().display(),
                 self.persistence.report_path().display(),
                 self.persistence.event_journal_path().display(),
+                self.persistence.cycle_summary_path().display(),
             );
             if let Some(message) = report.event_summary.latest_messages.first() {
                 println!("shadow latest_event={}", message);

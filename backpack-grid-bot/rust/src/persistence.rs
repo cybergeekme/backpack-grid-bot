@@ -25,11 +25,29 @@ pub struct EventJournalRecord {
     pub event: RuntimeEvent,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CycleSummaryRecord {
+    pub symbol: String,
+    pub recorded_at_unix_ms: i64,
+    pub mark_price: String,
+    pub service_state: String,
+    pub pause_reason: Option<String>,
+    pub issue_count: usize,
+    pub event_count: usize,
+    pub desired_orders: usize,
+    pub place_orders: usize,
+    pub cancel_orders: usize,
+    pub keep_orders: usize,
+    pub matched_orders: usize,
+    pub synthetic_fill: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct JsonFilePersistence {
     path: PathBuf,
     report_path: PathBuf,
     event_journal_path: PathBuf,
+    cycle_summary_path: PathBuf,
 }
 
 impl JsonFilePersistence {
@@ -38,10 +56,12 @@ impl JsonFilePersistence {
         let parent = path.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
         let report_path = parent.join("shadow-report.json");
         let event_journal_path = parent.join("events.jsonl");
+        let cycle_summary_path = parent.join("cycles.jsonl");
         Self {
             path,
             report_path,
             event_journal_path,
+            cycle_summary_path,
         }
     }
 
@@ -124,6 +144,35 @@ impl JsonFilePersistence {
         Ok(cycle.events.len())
     }
 
+    pub fn append_cycle_summary(&self, cycle: &ServiceCycleOutput, symbol: &str) -> Result<()> {
+        if let Some(parent) = self.cycle_summary_path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create cycle summary dir {}", parent.display()))?;
+        }
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.cycle_summary_path)
+            .with_context(|| format!("open cycle summary {}", self.cycle_summary_path.display()))?;
+        let record = CycleSummaryRecord {
+            symbol: symbol.to_string(),
+            recorded_at_unix_ms: now_unix_ms(),
+            mark_price: cycle.state.last_mid_price.unwrap_or_default().to_string(),
+            service_state: format!("{:?}", cycle.state.health.service_state),
+            pause_reason: cycle.state.health.pause_reason.map(|reason| format!("{:?}", reason)),
+            issue_count: cycle.state.health.issues.len(),
+            event_count: cycle.events.len(),
+            desired_orders: cycle.planner.desired_orders.len(),
+            place_orders: cycle.execution.place.len(),
+            cancel_orders: cycle.execution.cancel.len(),
+            keep_orders: cycle.execution.keep.len(),
+            matched_orders: cycle.reconciliation.diff.matched,
+            synthetic_fill: cycle.reconciliation.synthetic_fill.is_some(),
+        };
+        let line = serde_json::to_string(&record)?;
+        writeln!(file, "{line}")?;
+        Ok(())
+    }
+
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
@@ -134,6 +183,10 @@ impl JsonFilePersistence {
 
     pub fn event_journal_path(&self) -> &PathBuf {
         &self.event_journal_path
+    }
+
+    pub fn cycle_summary_path(&self) -> &PathBuf {
+        &self.cycle_summary_path
     }
 }
 
@@ -205,5 +258,18 @@ mod tests {
         let body = fs::read_to_string(store.event_journal_path()).unwrap();
         assert!(body.contains("ETH_USDC_PERP"));
         assert!(body.contains("service_state_changed"));
+    }
+
+    #[test]
+    fn appends_cycle_summary_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = JsonFilePersistence::new(dir.path().join("state.json"));
+        let cycle = sample_cycle();
+
+        store.append_cycle_summary(&cycle, "ETH_USDC_PERP").unwrap();
+        let body = fs::read_to_string(store.cycle_summary_path()).unwrap();
+        assert!(body.contains("ETH_USDC_PERP"));
+        assert!(body.contains("event_count"));
+        assert!(body.contains("service_state"));
     }
 }
