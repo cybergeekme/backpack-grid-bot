@@ -1,6 +1,7 @@
 use rust_decimal::Decimal;
 
 use crate::{
+    adapter::ReadOnlyAccountSnapshot,
     execution::{ExecutionEngine, ExecutionPlan, ExistingOrder},
     planner::GridPlanner,
     reconcile::{ReconcileEngine, ReconcileOutcome, ReconcileSnapshot},
@@ -82,6 +83,10 @@ impl GridBotService {
             reconciliation,
             state: self.state.get(),
         }
+    }
+
+    pub fn plan_cycle_from_snapshot(&mut self, snapshot: ReadOnlyAccountSnapshot) -> ServiceCycleOutput {
+        self.plan_cycle(snapshot.mark_price, snapshot.position, snapshot.open_orders)
     }
 
     pub fn config(&self) -> &AppConfig {
