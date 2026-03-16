@@ -462,6 +462,66 @@ test('backpack adapter treats empty capital payload as zero balance instead of f
   }
 });
 
+test('backpack adapter rejects configured leverage above account limit', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('/api/v1/time')) {
+      return new Response('{"serverTime":1773623800000}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (url.includes('/api/v1/account')) {
+      return new Response('{"leverageLimit":"3"}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const adapter = new BackpackFuturesAdapter({
+      enableWebSocket: false,
+      tradingEnabled: true,
+      apiKey: 'test-api-key',
+      apiSecret: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+    });
+    await adapter.connect();
+    const result = await adapter.validateLeverage('ETH_USDC_PERP', 5);
+    assert.equal(result.accepted, false);
+    assert.equal(result.accountLimit, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('backpack adapter accepts configured leverage within account limit but cannot verify applied leverage', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('/api/v1/time')) {
+      return new Response('{"serverTime":1773623800000}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (url.includes('/api/v1/account')) {
+      return new Response('{"leverageLimit":"75"}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const adapter = new BackpackFuturesAdapter({
+      enableWebSocket: false,
+      tradingEnabled: true,
+      apiKey: 'test-api-key',
+      apiSecret: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+    });
+    await adapter.connect();
+    const result = await adapter.validateLeverage('ETH_USDC_PERP', 5);
+    assert.equal(result.accepted, true);
+    assert.equal(result.verified, false);
+    assert.equal(result.canSet, false);
+    assert.equal(result.accountLimit, 75);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('order manager skips mutations when adapter is read-only', async () => {
   const adapter = new MockExchangeAdapter(100, 'BTC_USDC_PERP');
   const originalMode = adapter.getTradingAccessMode.bind(adapter);

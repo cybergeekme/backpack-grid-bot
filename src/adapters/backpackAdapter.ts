@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { BackpackWebSocketClient } from './backpackWebSocket';
 import { Logger } from '../logger';
-import type { AdapterEventListener, Balance, ExchangeAdapter, Order, OrderRequest, Position } from '../types';
+import type { AdapterEventListener, Balance, ExchangeAdapter, LeverageValidationResult, Order, OrderRequest, Position } from '../types';
 
 const API_BASE = 'https://api.backpack.exchange';
 const DEFAULT_WINDOW_MS = 5000;
@@ -21,6 +21,7 @@ interface BackpackAdapterOptions {
 }
 
 const INSTRUCTIONS = {
+  accountQuery: 'accountQuery',
   balanceQuery: 'balanceQuery',
   orderQueryAll: 'orderQueryAll',
   positionQuery: 'positionQuery',
@@ -225,6 +226,31 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
       throw new Error(`No mark price found for symbol ${symbol}`);
     }
     return Number(row.markPrice ?? row.price);
+  }
+
+  async validateLeverage(symbol: string, target: number): Promise<LeverageValidationResult> {
+    this.assertConnected();
+    this.assertCredentials('account leverage validation');
+    const account = await this.signedRequest<JsonObject>('GET', '/api/v1/account', INSTRUCTIONS.accountQuery, {});
+    const accountLimit = Number(account.leverageLimit ?? 0);
+    if (Number.isFinite(accountLimit) && accountLimit > 0 && target > accountLimit) {
+      return {
+        target,
+        accountLimit,
+        verified: false,
+        canSet: false,
+        accepted: false,
+        message: `Configured GRID_LEVERAGE=${target} exceeds Backpack account leverageLimit=${accountLimit} for ${symbol}.`
+      };
+    }
+    return {
+      target,
+      accountLimit: Number.isFinite(accountLimit) && accountLimit > 0 ? accountLimit : undefined,
+      verified: false,
+      canSet: false,
+      accepted: true,
+      message: `Backpack API exposes leverageLimit${Number.isFinite(accountLimit) && accountLimit > 0 ? `=${accountLimit}` : ''} but not the currently applied per-market leverage for ${symbol}; set leverage manually on the exchange side to ${target}x before enabling live mode.`
+    };
   }
 
   private assertConnected(): void {

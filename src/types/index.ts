@@ -132,6 +132,19 @@ export interface CheckpointCapableAdapter {
   importCheckpoint(payload: unknown): void;
 }
 
+export interface LeverageValidationResult {
+  target: number;
+  accountLimit?: number;
+  verified: boolean;
+  canSet: boolean;
+  accepted: boolean;
+  message: string;
+}
+
+export interface LeverageCapableAdapter {
+  validateLeverage(symbol: string, target: number): Promise<LeverageValidationResult>;
+}
+
 export interface AdapterOrderUpdate {
   kind: 'order';
   order: Order;

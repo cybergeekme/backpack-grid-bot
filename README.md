@@ -59,7 +59,7 @@ Optional:
 - `GRID_ACTIVE_LEVELS=3` keeps only the nearest levels live instead of hanging the entire theoretical grid at once
 - `GRID_SHORT_BIAS_SELL_RATIO=3` makes `short_bias` mode keep roughly 3x as many sell levels as buy levels inside the active window
 - `GRID_MIN_PRICE` / `GRID_MAX_PRICE` optionally define a full bounded price range; when both are set, the engine distributes `GRID_LEVELS` across the range and classifies each level relative to the current mid price
-- `GRID_LEVERAGE=1` stores the intended leverage in config/logs for operator visibility, but exchange-side leverage still needs to be set separately
+- `GRID_LEVERAGE=1` stores the intended leverage in config, validates it against Backpack account `leverageLimit` at startup, and logs an explicit warning that the currently applied per-market leverage still needs to be set manually on the exchange side
 - `GRID_KILL_SWITCH=true` to force strategy shutdown
 - `GRID_USE_BACKPACK=true` to switch from mock exchange to Backpack REST adapter
   - With `BACKPACK_ENABLE_LIVE=false`, the adapter runs in read-only mode: connect, fetch time/mark price, and perform signed reads like balance/open-orders/position, but never place/cancel orders.

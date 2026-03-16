@@ -10,8 +10,9 @@ import type {
   AdapterEvent,
   CheckpointCapableAdapter,
   ExchangeAdapter,
-  OrderRequest,
   GridLevel,
+  LeverageCapableAdapter,
+  OrderRequest,
   ReconciliationEvent,
   RiskEvent,
   RuntimeCheckpoint,
@@ -21,6 +22,11 @@ import type {
 function hasCheckpointSupport(adapter: ExchangeAdapter): adapter is ExchangeAdapter & CheckpointCapableAdapter {
   const candidate = adapter as unknown as CheckpointCapableAdapter;
   return typeof candidate.exportCheckpoint === 'function' && typeof candidate.importCheckpoint === 'function';
+}
+
+function hasLeverageValidation(adapter: ExchangeAdapter): adapter is ExchangeAdapter & LeverageCapableAdapter {
+  const candidate = adapter as unknown as LeverageCapableAdapter;
+  return typeof candidate.validateLeverage === 'function';
 }
 
 export class GridTradingService {
@@ -48,6 +54,7 @@ export class GridTradingService {
     this.restorePersistedState();
     this.unsubscribeAdapterEvents = this.adapter.onEvent?.((event) => this.handleAdapterEvent(event));
     await this.adapter.connect();
+    await this.validateConfiguredLeverage();
     this.persistRuntimeCheckpoint('service_started');
   }
 
@@ -196,6 +203,22 @@ export class GridTradingService {
       symbol: this.config.symbol,
       openOrders: orders.length,
       position: position.size
+    });
+  }
+
+  private async validateConfiguredLeverage(): Promise<void> {
+    if (this.config.leverage <= 1 || !hasLeverageValidation(this.adapter)) return;
+    const result = await this.adapter.validateLeverage(this.config.symbol, this.config.leverage);
+    if (!result.accepted) {
+      throw new Error(result.message);
+    }
+    this.logger.warn('Configured leverage requires exchange-side confirmation.', {
+      symbol: this.config.symbol,
+      leverage: this.config.leverage,
+      accountLimit: result.accountLimit,
+      verified: result.verified,
+      canSet: result.canSet,
+      message: result.message
     });
   }
 
