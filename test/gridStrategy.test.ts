@@ -66,9 +66,10 @@ test('grid strategy builds bounded range levels and classifies them around mid p
   assert.equal(snapshot.levels.at(-1)?.price, 2211.11);
 });
 
-test('risk engine rejects breaches and kill switch', () => {
+test('risk engine rejects breaches, short-only long flips, and kill switch', () => {
   process.env.GRID_MAX_POSITION_ABS = '0.05';
   process.env.GRID_KILL_SWITCH = 'false';
+  process.env.GRID_MODE = 'neutral';
   const config = loadConfig();
   const risk = new RiskEngine(config);
   const position: Position = { symbol: 'BTC-PERP', size: 0.04, entryPrice: 100, unrealizedPnl: 0 };
@@ -76,6 +77,13 @@ test('risk engine rejects breaches and kill switch', () => {
   assert.deepEqual(risk.validateNewOrder(position, 'buy', 0.02), {
     ok: false,
     reason: 'max_position_breached'
+  });
+
+  process.env.GRID_MODE = 'short_only';
+  const shortOnlyRisk = new RiskEngine(loadConfig());
+  assert.deepEqual(shortOnlyRisk.validateNewOrder({ symbol: 'BTC-PERP', size: -0.01, entryPrice: 100, unrealizedPnl: 0 }, 'buy', 0.02), {
+    ok: false,
+    reason: 'short_only_long_flip_blocked'
   });
 
   process.env.GRID_KILL_SWITCH = 'true';
@@ -214,6 +222,47 @@ test('service selects a bounded active window with short bias instead of hanging
   assert.equal(state.workingOrders.filter((o) => o.side === 'sell').length, 15);
   assert.equal(config.leverage, 5);
   assert.equal(config.gridMode, 'short_bias');
+
+  await service.stop();
+});
+
+test('short-only mode opens shorts and only places reduce-only buys against an existing short', async () => {
+  resetGridEnv();
+  process.env.GRID_LEVELS = '100';
+  process.env.GRID_ORDER_SIZE = '0.003';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_KILL_SWITCH = 'false';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-short-only');
+  process.env.GRID_SERVICE_NAME = 'grid-short-only-test';
+  process.env.GRID_MIN_PRICE = '1500';
+  process.env.GRID_MAX_PRICE = '2300';
+  process.env.GRID_MODE = 'short_only';
+  process.env.GRID_ACTIVE_LEVELS = '3';
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(1900, config.symbol, 10_000);
+  const service = new GridTradingService(config, adapter);
+  await service.start();
+  await service.rebalance();
+
+  let state = service.snapshot();
+  assert.equal(state.workingOrders.filter((o) => o.side === 'buy').length, 0);
+  assert.equal(state.workingOrders.filter((o) => o.side === 'sell').length, 3);
+
+  adapter.movePrice(1915);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await service.reconcileWithExchange();
+  await service.rebalance();
+
+  state = service.snapshot();
+  const buyOrders = state.workingOrders.filter((o) => o.side === 'buy');
+  const sellOrders = state.workingOrders.filter((o) => o.side === 'sell');
+  assert.ok((state.position?.size ?? 0) < 0);
+  assert.ok(buyOrders.length >= 1);
+  assert.ok(buyOrders.every((o) => o.reduceOnly === true));
+  assert.ok(buyOrders.reduce((sum, order) => sum + order.qty, 0) <= Math.abs(state.position?.size ?? 0) + 1e-9);
+  assert.ok(sellOrders.length >= 1);
 
   await service.stop();
 });

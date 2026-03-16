@@ -111,22 +111,32 @@ export class GridTradingService {
     this.persistence.persistPosition(position);
     this.oms.applyPositionUpdate(position);
     const desired: OrderRequest[] = [];
-    const activeLevels = this.selectActiveLevels(snapshot.levels, midPrice);
+    const activeLevels = this.selectActiveLevels(snapshot.levels, midPrice, position);
+    let plannedPosition = position.size;
 
     for (const level of activeLevels) {
-      const risk = this.risk.validateNewOrder(position, level.side, level.qty);
+      const isShortOnlyReduceBuy = this.config.gridMode === 'short_only' && level.side === 'buy';
+      const maxReducibleQty = isShortOnlyReduceBuy ? Math.max(0, -plannedPosition) : undefined;
+      const qty = isShortOnlyReduceBuy ? Math.min(level.qty, maxReducibleQty ?? 0) : level.qty;
+      if (!(qty > 0)) continue;
+
+      const projectedPosition: Position = {
+        ...position,
+        size: plannedPosition
+      };
+      const risk = this.risk.validateNewOrder(projectedPosition, level.side, qty);
       if (!risk.ok) {
         const riskEvent: RiskEvent = {
           symbol: this.config.symbol,
           side: level.side,
-          qty: level.qty,
+          qty,
           reason: risk.reason ?? 'unknown',
           levelIndex: level.index,
           price: level.price,
           ts: Date.now()
         };
         this.persistence.persistRiskEvent(riskEvent);
-        this.logger.warn('Risk rejected level.', { level: level.index, side: level.side, price: level.price, reason: risk.reason });
+        this.logger.warn('Risk rejected level.', { level: level.index, side: level.side, price: level.price, qty, reason: risk.reason, plannedPosition });
         continue;
       }
       desired.push({
@@ -135,10 +145,11 @@ export class GridTradingService {
         side: level.side,
         type: 'limit',
         price: level.price,
-        qty: level.qty,
+        qty,
         postOnly: true,
-        reduceOnly: false
+        reduceOnly: isShortOnlyReduceBuy
       });
+      plannedPosition += level.side === 'buy' ? qty : -qty;
     }
 
     const tradingAccessMode = this.adapter.getTradingAccessMode();
@@ -277,14 +288,19 @@ export class GridTradingService {
     });
   }
 
-  private selectActiveLevels(levels: GridLevel[], midPrice: number): GridLevel[] {
+  private selectActiveLevels(levels: GridLevel[], midPrice: number, position?: Position): GridLevel[] {
     const sorted = [...levels].sort((a, b) => Math.abs((a.price ?? midPrice) - midPrice) - Math.abs((b.price ?? midPrice) - midPrice));
     const sells = sorted.filter((level) => level.side === 'sell');
     const buys = sorted.filter((level) => level.side === 'buy');
     const perSide = this.config.gridActiveLevels;
 
     if (this.config.gridMode === 'short_only') {
-      return sells.slice(0, perSide).sort((a, b) => a.price - b.price);
+      const sellLevels = sells.slice(0, perSide);
+      const reduceBuySlots = position && position.size < 0
+        ? Math.min(buys.length, perSide, Math.ceil(Math.abs(position.size) / this.config.orderSize))
+        : 0;
+      const reduceBuyLevels = buys.slice(0, reduceBuySlots);
+      return [...reduceBuyLevels, ...sellLevels].sort((a, b) => a.price - b.price);
     }
 
     if (this.config.gridMode === 'short_bias') {
