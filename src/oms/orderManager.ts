@@ -12,6 +12,8 @@ export class OrderManager {
   private readonly workingOrders = new Map<string, Order>();
   private readonly reconciliation = new OrderReconciliation();
   private lastKnownPosition?: Position;
+  private lastReadOnlyLogKey?: string;
+  private lastReadOnlyLogTs = 0;
 
   constructor(private readonly adapter: ExchangeAdapter) {}
 
@@ -20,13 +22,7 @@ export class OrderManager {
     if (this.adapter.getTradingAccessMode() === 'read-only') {
       this.seedWorkingOrders(existing);
       const reconciliation = this.reconciliation.compare(existing, desired);
-      this.logger.warn('Read-only adapter mode: skipping grid mutations.', {
-        symbol,
-        existing: existing.length,
-        desired: desired.length,
-        missingOnExchange: reconciliation.missingOnExchange.length,
-        unexpectedOnExchange: reconciliation.unexpectedOnExchange.length
-      });
+      this.logReadOnlySkip(symbol, existing.length, desired.length, reconciliation.missingOnExchange.length, reconciliation.unexpectedOnExchange.length);
       return { orders: existing, reconciliation };
     }
     this.seedWorkingOrders(existing);
@@ -93,6 +89,23 @@ export class OrderManager {
         this.workingOrders.set(order.orderId, { ...order });
       }
     }
+  }
+
+  private logReadOnlySkip(symbol: string, existing: number, desired: number, missingOnExchange: number, unexpectedOnExchange: number): void {
+    const now = Date.now();
+    const key = `${symbol}:${existing}:${desired}:${missingOnExchange}:${unexpectedOnExchange}`;
+    if (key === this.lastReadOnlyLogKey && now - this.lastReadOnlyLogTs < 300_000) {
+      return;
+    }
+    this.lastReadOnlyLogKey = key;
+    this.lastReadOnlyLogTs = now;
+    this.logger.warn('Read-only adapter mode: skipping grid mutations.', {
+      symbol,
+      existing,
+      desired,
+      missingOnExchange,
+      unexpectedOnExchange
+    });
   }
 
   private key(side: string, price: number | undefined, qty: number): string {

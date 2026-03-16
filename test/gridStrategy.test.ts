@@ -21,7 +21,17 @@ function withDbPath(name: string): string {
   return path.join(dir, 'state.sqlite');
 }
 
+function resetGridEnv(): void {
+  delete process.env.GRID_MIN_PRICE;
+  delete process.env.GRID_MAX_PRICE;
+  delete process.env.GRID_MODE;
+  delete process.env.GRID_ACTIVE_LEVELS;
+  delete process.env.GRID_SHORT_BIAS_SELL_RATIO;
+  delete process.env.GRID_LEVERAGE;
+}
+
 test('grid strategy builds symmetric buy/sell levels', () => {
+  resetGridEnv();
   process.env.GRID_LEVELS = '2';
   process.env.GRID_SPACING_BPS = '50';
   process.env.GRID_ORDER_SIZE = '0.01';
@@ -36,6 +46,24 @@ test('grid strategy builds symmetric buy/sell levels', () => {
     ['sell', 100.5],
     ['sell', 101]
   ]);
+});
+
+test('grid strategy builds bounded range levels and classifies them around mid price', () => {
+  resetGridEnv();
+  process.env.GRID_LEVELS = '8';
+  process.env.GRID_ORDER_SIZE = '0.01';
+  process.env.GRID_MIN_PRICE = '1500';
+  process.env.GRID_MAX_PRICE = '2300';
+  const config = loadConfig();
+  const engine = new GridStrategyEngine(config);
+  const snapshot = engine.buildGrid(1900);
+
+  assert.deepEqual(snapshot.range, { minPrice: 1500, maxPrice: 2300 });
+  assert.equal(snapshot.levels.length, 8);
+  assert.equal(snapshot.levels.filter((l) => l.side === 'buy').length, 4);
+  assert.equal(snapshot.levels.filter((l) => l.side === 'sell').length, 4);
+  assert.equal(snapshot.levels[0]?.price, 1588.89);
+  assert.equal(snapshot.levels.at(-1)?.price, 2211.11);
 });
 
 test('risk engine rejects breaches and kill switch', () => {
@@ -108,6 +136,7 @@ test('reconciliation reports missing and unexpected orders', () => {
 });
 
 test('grid service consumes adapter events and updates state', async () => {
+  resetGridEnv();
   process.env.GRID_LEVELS = '1';
   process.env.GRID_SPACING_BPS = '50';
   process.env.GRID_ORDER_SIZE = '0.01';
@@ -156,7 +185,41 @@ test('order manager applies streamed order updates', async () => {
   assert.equal(oms.getWorkingOrders().length, 0);
 });
 
+test('service selects a bounded active window with short bias instead of hanging the full range', async () => {
+  resetGridEnv();
+  process.env.GRID_LEVELS = '100';
+  process.env.GRID_ORDER_SIZE = '0.01';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_KILL_SWITCH = 'false';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-short-bias');
+  process.env.GRID_SERVICE_NAME = 'grid-short-bias-test';
+  process.env.GRID_MIN_PRICE = '1500';
+  process.env.GRID_MAX_PRICE = '2300';
+  process.env.GRID_MODE = 'short_bias';
+  process.env.GRID_ACTIVE_LEVELS = '5';
+  process.env.GRID_SHORT_BIAS_SELL_RATIO = '3';
+  process.env.GRID_LEVERAGE = '5';
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(1900, config.symbol, 10_000);
+  const service = new GridTradingService(config, adapter);
+  await service.start();
+  await service.rebalance();
+
+  const state = service.snapshot();
+  assert.equal(state.snapshot?.levels.length, 100);
+  assert.equal(state.workingOrders.length, 20);
+  assert.equal(state.workingOrders.filter((o) => o.side === 'buy').length, 5);
+  assert.equal(state.workingOrders.filter((o) => o.side === 'sell').length, 15);
+  assert.equal(config.leverage, 5);
+  assert.equal(config.gridMode, 'short_bias');
+
+  await service.stop();
+});
+
 test('service pauses when price moves outside previous grid range', async () => {
+  resetGridEnv();
   process.env.GRID_LEVELS = '1';
   process.env.GRID_SPACING_BPS = '50';
   process.env.GRID_ORDER_SIZE = '0.01';

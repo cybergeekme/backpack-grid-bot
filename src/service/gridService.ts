@@ -11,6 +11,7 @@ import type {
   CheckpointCapableAdapter,
   ExchangeAdapter,
   OrderRequest,
+  GridLevel,
   ReconciliationEvent,
   RiskEvent,
   RuntimeCheckpoint,
@@ -92,8 +93,9 @@ export class GridTradingService {
     this.persistence.persistPosition(position);
     this.oms.applyPositionUpdate(position);
     const desired: OrderRequest[] = [];
+    const activeLevels = this.selectActiveLevels(snapshot.levels, midPrice);
 
-    for (const level of snapshot.levels) {
+    for (const level of activeLevels) {
       const risk = this.risk.validateNewOrder(position, level.side, level.qty);
       if (!risk.ok) {
         const riskEvent: RiskEvent = {
@@ -157,6 +159,10 @@ export class GridTradingService {
     this.logger.info('Rebalanced grid.', {
       symbol: this.config.symbol,
       midPrice,
+      totalLevels: snapshot.levels.length,
+      activeLevels: activeLevels.length,
+      gridMode: this.config.gridMode,
+      leverage: this.config.leverage,
       workingOrders: syncResult.orders.length,
       position: refreshedPosition.size,
       balance: balance.available,
@@ -191,6 +197,25 @@ export class GridTradingService {
       openOrders: orders.length,
       position: position.size
     });
+  }
+
+  private selectActiveLevels(levels: GridLevel[], midPrice: number): GridLevel[] {
+    const sorted = [...levels].sort((a, b) => Math.abs((a.price ?? midPrice) - midPrice) - Math.abs((b.price ?? midPrice) - midPrice));
+    const sells = sorted.filter((level) => level.side === 'sell');
+    const buys = sorted.filter((level) => level.side === 'buy');
+    const perSide = this.config.gridActiveLevels;
+
+    if (this.config.gridMode === 'short_only') {
+      return sells.slice(0, perSide).sort((a, b) => a.price - b.price);
+    }
+
+    if (this.config.gridMode === 'short_bias') {
+      const sellCount = Math.min(sells.length, Math.max(1, Math.round(perSide * this.config.gridShortBiasSellRatio)));
+      const buyCount = Math.min(buys.length, perSide);
+      return [...buys.slice(0, buyCount), ...sells.slice(0, sellCount)].sort((a, b) => a.price - b.price);
+    }
+
+    return [...buys.slice(0, perSide), ...sells.slice(0, perSide)].sort((a, b) => a.price - b.price);
   }
 
   private restorePersistedState(): void {

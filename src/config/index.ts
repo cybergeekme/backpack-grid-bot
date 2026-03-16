@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+export type GridMode = 'neutral' | 'short_bias' | 'short_only';
+
 export interface AppConfig {
   env: 'dev' | 'prod' | 'test';
   symbol: string;
@@ -7,6 +9,12 @@ export interface AppConfig {
   spacingBps: number;
   orderSize: number;
   maxPositionAbs: number;
+  gridMode: GridMode;
+  gridActiveLevels: number;
+  gridShortBiasSellRatio: number;
+  gridMinPrice?: number;
+  gridMaxPrice?: number;
+  leverage: number;
   quoteAsset: string;
   killSwitch: boolean;
   useBackpack: boolean;
@@ -53,6 +61,23 @@ function alertLevel(name: string, fallback: 'info' | 'warn' | 'critical'): 'info
   throw new Error(`Invalid alert level env ${name}=${raw}`);
 }
 
+function gridMode(name: string, fallback: GridMode): GridMode {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  if (raw === 'neutral' || raw === 'short_bias' || raw === 'short_only') return raw;
+  throw new Error(`Invalid grid mode env ${name}=${raw}`);
+}
+
+function optionalNum(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid numeric env ${name}=${raw}`);
+  }
+  return parsed;
+}
+
 export function loadConfig(): AppConfig {
   const envRaw = process.env.NODE_ENV ?? 'dev';
   const env = envRaw === 'production' ? 'prod' : envRaw === 'test' ? 'test' : 'dev';
@@ -63,6 +88,12 @@ export function loadConfig(): AppConfig {
     spacingBps: num('GRID_SPACING_BPS', 50),
     orderSize: num('GRID_ORDER_SIZE', 0.01),
     maxPositionAbs: num('GRID_MAX_POSITION_ABS', 0.05),
+    gridMode: gridMode('GRID_MODE', 'neutral'),
+    gridActiveLevels: Math.max(1, Math.floor(num('GRID_ACTIVE_LEVELS', 3))),
+    gridShortBiasSellRatio: Math.max(1, num('GRID_SHORT_BIAS_SELL_RATIO', 3)),
+    gridMinPrice: optionalNum('GRID_MIN_PRICE'),
+    gridMaxPrice: optionalNum('GRID_MAX_PRICE'),
+    leverage: Math.max(1, num('GRID_LEVERAGE', 1)),
     quoteAsset: process.env.GRID_QUOTE_ASSET ?? 'USDC',
     killSwitch: bool('GRID_KILL_SWITCH', false),
     useBackpack: bool('GRID_USE_BACKPACK', false),

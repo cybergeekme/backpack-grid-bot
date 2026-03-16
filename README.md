@@ -29,6 +29,7 @@ A production-oriented TypeScript skeleton for a futures grid trading service.
 - Consecutive loop failures trip a circuit breaker into `SAFE_MODE`; reconciliation continues but new rebalances stop.
 - Periodic REST reconciliation refreshes orders/position even while paused or degraded.
 - Optional Telegram alerting can page operators for lifecycle/state changes, circuit breaker trips, out-of-range pauses, reconciliation mismatches, and fills.
+- Read-only reconciliation logging is now deduplicated so validation runs do not spam identical warnings every loop.
 - WebSocket connection attempts inherit the same live-trading safety gate and degrade back to REST-only if WS connect fails.
 - Backpack integration currently covers authenticated REST calls for balances, open orders, single-position lookup, order placement/cancel, public mark prices, and typed WS normalization scaffolding for order/position/fill updates.
 - Persistence now covers local runtime snapshots and checkpoints, but live-trading replay logic after partial exchange disconnects is still incomplete.
@@ -51,9 +52,14 @@ Optional:
 
 - `GRID_SYMBOL` (default: `ETH_USDC_PERP`)
 - `GRID_LEVELS` (default: `3`)
-- `GRID_SPACING_BPS` (default: `50`)
+- `GRID_SPACING_BPS` (default: `50`) for the legacy symmetric grid mode
 - `GRID_ORDER_SIZE` (default: `0.01`)
 - `GRID_MAX_POSITION_ABS` (default: `0.05`)
+- `GRID_MODE=neutral|short_bias|short_only` (default: `neutral`)
+- `GRID_ACTIVE_LEVELS=3` keeps only the nearest levels live instead of hanging the entire theoretical grid at once
+- `GRID_SHORT_BIAS_SELL_RATIO=3` makes `short_bias` mode keep roughly 3x as many sell levels as buy levels inside the active window
+- `GRID_MIN_PRICE` / `GRID_MAX_PRICE` optionally define a full bounded price range; when both are set, the engine distributes `GRID_LEVELS` across the range and classifies each level relative to the current mid price
+- `GRID_LEVERAGE=1` stores the intended leverage in config/logs for operator visibility, but exchange-side leverage still needs to be set separately
 - `GRID_KILL_SWITCH=true` to force strategy shutdown
 - `GRID_USE_BACKPACK=true` to switch from mock exchange to Backpack REST adapter
   - With `BACKPACK_ENABLE_LIVE=false`, the adapter runs in read-only mode: connect, fetch time/mark price, and perform signed reads like balance/open-orders/position, but never place/cancel orders.

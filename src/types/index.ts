@@ -75,6 +75,10 @@ export interface StrategySnapshot {
   symbol: string;
   midPrice: number;
   levels: GridLevel[];
+  range?: {
+    minPrice: number;
+    maxPrice: number;
+  };
 }
 
 export interface RuntimeState {
