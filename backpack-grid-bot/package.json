@@ -1,0 +1,32 @@
+{
+  "name": "backpack-grid-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Production-oriented v1 skeleton for a Backpack futures grid trading service with local simulation.",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "demo": "tsx src/index.ts demo",
+    "service": "tsx src/index.ts service",
+    "start": "node dist/index.js service",
+    "test": "node --test --import tsx test/**/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "trading",
+    "grid",
+    "futures",
+    "backpack",
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.9.2"
+  }
+}
