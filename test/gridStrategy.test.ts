@@ -465,12 +465,56 @@ test('backpack adapter treats missing position as flat instead of fatal', async 
   }
 });
 
-test('backpack adapter treats empty capital payload as zero balance instead of fatal', async () => {
+test('backpack adapter prefers collateral equity for trading balance', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     if (url.includes('/api/v1/time')) {
       return new Response('{"serverTime":1773623800000}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    if (url.includes('/api/v1/capital/collateral')) {
+      return new Response('{"netEquity":"149.4","netEquityAvailable":"149.4","collateral":[{"symbol":"USDC","totalQuantity":"149.4","availableQuantity":"0","balanceNotional":"149.4"}]}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const adapter = new BackpackFuturesAdapter({
+      enableWebSocket: false,
+      tradingEnabled: false,
+      apiKey: 'test-api-key',
+      apiSecret: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+    });
+    await adapter.connect();
+    const balance = await adapter.getBalance('USDC');
+    assert.deepEqual(balance, {
+      asset: 'USDC',
+      total: 149.4,
+      available: 149.4
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('backpack adapter falls back to capital payload when collateral equity is empty', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('/api/v1/time')) {
+      return new Response('{"serverTime":1773623800000}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    if (url.includes('/api/v1/capital/collateral')) {
+      return new Response('{}', {
         status: 200,
         headers: { 'content-type': 'application/json' }
       });

@@ -23,6 +23,7 @@ interface BackpackAdapterOptions {
 const INSTRUCTIONS = {
   accountQuery: 'accountQuery',
   balanceQuery: 'balanceQuery',
+  collateralQuery: 'collateralQuery',
   orderQueryAll: 'orderQueryAll',
   positionQuery: 'positionQuery',
   orderExecute: 'orderExecute',
@@ -149,6 +150,24 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
   async getBalance(asset: string): Promise<Balance> {
     this.assertConnected();
     this.assertCredentials('signed read balance');
+
+    const collateralPayload = await this.signedRequest<unknown>('GET', '/api/v1/capital/collateral', INSTRUCTIONS.collateralQuery, {});
+    const collateralSummary = this.normalizeCollateralSummary(collateralPayload);
+    if (collateralSummary) {
+      const total = Number(collateralSummary.netEquity ?? 0);
+      const available = Number(collateralSummary.netEquityAvailable ?? collateralSummary.netEquity ?? 0);
+      if (total > 0 || available > 0) {
+        return { asset, total, available };
+      }
+
+      const collateralRow = collateralSummary.collateral.find((entry) => String(entry.symbol ?? '') === asset);
+      if (collateralRow) {
+        const rowTotal = Number(collateralRow.totalQuantity ?? collateralRow.balanceNotional ?? 0);
+        const rowAvailable = Number(collateralRow.availableQuantity ?? collateralRow.balanceNotional ?? rowTotal ?? 0);
+        return { asset, total: rowTotal, available: rowAvailable };
+      }
+    }
+
     const payload = await this.signedRequest<unknown>('GET', '/api/v1/capital', INSTRUCTIONS.balanceQuery, {});
     const balances = this.normalizeBalances(payload);
     const row = balances.find((entry) => String(entry.asset ?? '') === asset);
@@ -364,6 +383,23 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
     return Object.entries(record)
       .filter(([, entry]) => typeof entry === 'object' && entry !== null)
       .map(([asset, entry]) => ({ asset, ...(entry as JsonObject) }));
+  }
+
+  private normalizeCollateralSummary(payload: unknown): { netEquity?: number; netEquityAvailable?: number; collateral: JsonObject[] } | null {
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+      return null;
+    }
+
+    const record = payload as JsonObject;
+    const collateral = Array.isArray(record.collateral)
+      ? record.collateral.filter((entry): entry is JsonObject => typeof entry === 'object' && entry !== null)
+      : [];
+
+    return {
+      netEquity: record.netEquity !== undefined ? Number(record.netEquity) : undefined,
+      netEquityAvailable: record.netEquityAvailable !== undefined ? Number(record.netEquityAvailable) : undefined,
+      collateral
+    };
   }
 
   private parseJson(text: string): unknown {
