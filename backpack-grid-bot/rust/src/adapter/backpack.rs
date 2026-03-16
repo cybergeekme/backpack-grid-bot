@@ -42,7 +42,7 @@ impl BackpackNormalize {
             Value::Array(rows) => {
                 let parsed = rows
                     .iter()
-                    .filter_map(|entry| serde_json::from_value::<BackpackPositionRow>(entry.clone()).ok())
+                    .filter_map(|entry| serde_json::from_value::<BackpackPositionRow>(rewrite_position_keys(entry.clone())).ok())
                     .collect::<Vec<_>>();
                 parsed
                     .iter()
@@ -50,7 +50,7 @@ impl BackpackNormalize {
                     .cloned()
                     .or_else(|| parsed.into_iter().next())
             }
-            Value::Object(_) => serde_json::from_value::<BackpackPositionRow>(payload.clone()).ok(),
+            Value::Object(_) => serde_json::from_value::<BackpackPositionRow>(rewrite_position_keys(payload.clone())).ok(),
             _ => None,
         }
     }
@@ -166,6 +166,20 @@ impl BackpackNormalize {
 
 fn rewrite_balance_keys(value: Value) -> Value {
     rename_keys(value, &[("availableBalance", "available_balance")])
+}
+
+fn rewrite_position_keys(value: Value) -> Value {
+    rename_keys(
+        value,
+        &[
+            ("netQuantity", "net_quantity"),
+            ("positionQty", "position_qty"),
+            ("entryPrice", "entry_price"),
+            ("averageEntryPrice", "average_entry_price"),
+            ("unrealizedPnl", "unrealized_pnl"),
+            ("pnlUnrealized", "pnl_unrealized"),
+        ],
+    )
 }
 
 fn rewrite_collateral_keys(value: Value) -> Value {
