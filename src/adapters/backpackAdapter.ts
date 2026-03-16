@@ -82,6 +82,12 @@ function mapOrderType(orderType: string | undefined): Order['type'] {
   return orderType?.toLowerCase() === 'market' ? 'market' : 'limit';
 }
 
+function backpackClientId(value: string): number {
+  const hash = crypto.createHash('sha256').update(value).digest();
+  const id = hash.readUInt32BE(0);
+  return id === 0 ? 1 : id;
+}
+
 export class BackpackFuturesAdapter implements ExchangeAdapter {
   readonly name = 'backpack-futures';
   private readonly logger = new Logger('BackpackFuturesAdapter');
@@ -218,7 +224,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
       side,
       orderType: request.type === 'market' ? 'Market' : 'Limit',
       quantity: String(request.qty),
-      clientId: request.clientOrderId,
+      clientId: backpackClientId(request.clientOrderId),
       reduceOnly: request.reduceOnly ?? false,
       postOnly: request.postOnly ?? false
     };
@@ -294,7 +300,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
   private normalizeOrder(payload: JsonObject, fallback?: Partial<OrderRequest>): Order {
     return {
       orderId: String(payload.orderId ?? payload.id ?? payload.clientId ?? fallback?.clientOrderId ?? 'unknown'),
-      clientOrderId: String(payload.clientId ?? payload.clientOrderId ?? fallback?.clientOrderId ?? ''),
+      clientOrderId: String(fallback?.clientOrderId ?? payload.clientOrderId ?? payload.clientId ?? ''),
       symbol: String(payload.symbol ?? fallback?.symbol ?? ''),
       side: mapSide(String(payload.side ?? (fallback?.side === 'sell' ? 'Ask' : 'Bid'))),
       type: mapOrderType(String(payload.orderType ?? fallback?.type ?? 'limit')),

@@ -465,6 +465,54 @@ test('backpack adapter treats missing position as flat instead of fatal', async 
   }
 });
 
+test('backpack adapter sends numeric Backpack clientId while preserving internal clientOrderId', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedBody: Record<string, unknown> | undefined;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('/api/v1/time')) {
+      return new Response('{"serverTime":1773623800000}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    if (url.includes('/api/v1/order')) {
+      capturedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return new Response('{"orderId":"12345","clientId":321,"status":"Accepted","symbol":"ETH_USDC_PERP","side":"Bid","orderType":"Limit","price":"2200","quantity":"0.003","executedQuantity":"0"}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const adapter = new BackpackFuturesAdapter({
+      enableWebSocket: false,
+      tradingEnabled: true,
+      apiKey: 'test-api-key',
+      apiSecret: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+    });
+    await adapter.connect();
+    const order = await adapter.placeOrder({
+      clientOrderId: 'grid-buy-93-223663',
+      symbol: 'ETH_USDC_PERP',
+      side: 'buy',
+      type: 'limit',
+      price: 2200,
+      qty: 0.003,
+      postOnly: true,
+      reduceOnly: false
+    });
+
+    assert.equal(typeof capturedBody?.clientId, 'number');
+    assert.equal(order.clientOrderId, 'grid-buy-93-223663');
+    assert.equal(order.orderId, '12345');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('backpack adapter prefers collateral equity for trading balance', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
