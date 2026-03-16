@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::domain::{OrderIntent, OrderSide, OrderType, Position};
 
-use super::dto::{BackpackBalanceRow, BackpackCollateralRow, BackpackCollateralSummary, BackpackOrderRow, BackpackPositionRow};
+use super::dto::{BackpackBalanceRow, BackpackCollateralSummary, BackpackOrderRow, BackpackPositionRow};
 
 #[derive(Debug, Error)]
 pub enum BackpackAdapterError {

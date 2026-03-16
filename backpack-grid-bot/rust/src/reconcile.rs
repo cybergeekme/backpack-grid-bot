@@ -1,4 +1,4 @@
-use rust_decimal::Decimal;
+use rust_decimal::{prelude::Signed, Decimal};
 
 use crate::{
     execution::{ExistingOrder, ReconciliationDiff},
