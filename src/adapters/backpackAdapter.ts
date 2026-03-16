@@ -148,8 +148,9 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
   async getBalance(asset: string): Promise<Balance> {
     this.assertConnected();
     this.assertCredentials('signed read balance');
-    const balances = await this.signedRequest<unknown[]>('GET', '/api/v1/capital', INSTRUCTIONS.balanceQuery, {});
-    const row = balances.find((entry) => typeof entry === 'object' && entry !== null && String((entry as JsonObject).asset ?? '') === asset) as JsonObject | undefined;
+    const payload = await this.signedRequest<unknown>('GET', '/api/v1/capital', INSTRUCTIONS.balanceQuery, {});
+    const balances = this.normalizeBalances(payload);
+    const row = balances.find((entry) => String(entry.asset ?? '') === asset);
     if (!row) {
       return { asset, total: 0, available: 0 };
     }
@@ -318,6 +319,25 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
       throw new Error(`Backpack API ${method} ${path} failed: ${response.status} ${response.statusText} ${text}`);
     }
     return body as T;
+  }
+
+  private normalizeBalances(payload: unknown): JsonObject[] {
+    if (Array.isArray(payload)) {
+      return payload.filter((entry): entry is JsonObject => typeof entry === 'object' && entry !== null);
+    }
+    if (typeof payload !== 'object' || payload === null) {
+      return [];
+    }
+
+    const record = payload as JsonObject;
+    const nested = record.balances ?? record.capital ?? record.items;
+    if (Array.isArray(nested)) {
+      return nested.filter((entry): entry is JsonObject => typeof entry === 'object' && entry !== null);
+    }
+
+    return Object.entries(record)
+      .filter(([, entry]) => typeof entry === 'object' && entry !== null)
+      .map(([asset, entry]) => ({ asset, ...(entry as JsonObject) }));
   }
 
   private parseJson(text: string): unknown {

@@ -361,6 +361,44 @@ test('backpack adapter treats missing position as flat instead of fatal', async 
   }
 });
 
+test('backpack adapter treats empty capital payload as zero balance instead of fatal', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('/api/v1/time')) {
+      return new Response('{"serverTime":1773623800000}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    if (url.includes('/api/v1/capital')) {
+      return new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const adapter = new BackpackFuturesAdapter({
+      enableWebSocket: false,
+      tradingEnabled: false,
+      apiKey: 'test-api-key',
+      apiSecret: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+    });
+    await adapter.connect();
+    const balance = await adapter.getBalance('USDC');
+    assert.deepEqual(balance, {
+      asset: 'USDC',
+      total: 0,
+      available: 0
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('order manager skips mutations when adapter is read-only', async () => {
   const adapter = new MockExchangeAdapter(100, 'BTC_USDC_PERP');
   const originalMode = adapter.getTradingAccessMode.bind(adapter);
