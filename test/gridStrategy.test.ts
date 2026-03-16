@@ -610,6 +610,45 @@ test('backpack adapter treats missing position as flat instead of fatal', async 
   }
 });
 
+test('backpack adapter parses array position payloads and keeps pnl fields', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('/api/v1/time')) {
+      return new Response('{"serverTime":1773623800000}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    if (url.includes('/api/v1/position')) {
+      return new Response('[{"symbol":"BTC_USDC_PERP","netQuantity":"-0.002","entryPrice":"90000","pnlUnrealized":"1.23"},{"symbol":"ETH_USDC_PERP","netQuantity":"0.003","entryPrice":"2260.4","pnlUnrealized":"-0.00282"}]', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  try {
+    const adapter = new BackpackFuturesAdapter({
+      enableWebSocket: false,
+      tradingEnabled: false,
+      apiKey: 'test-api-key',
+      apiSecret: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+    });
+    await adapter.connect();
+    const position = await adapter.getPosition('ETH_USDC_PERP');
+    assert.deepEqual(position, {
+      symbol: 'ETH_USDC_PERP',
+      size: 0.003,
+      entryPrice: 2260.4,
+      unrealizedPnl: -0.00282
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('backpack adapter sends numeric Backpack clientId while preserving internal clientOrderId', async () => {
   const originalFetch = globalThis.fetch;
   let capturedBody: Record<string, unknown> | undefined;

@@ -201,10 +201,14 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
     this.assertConnected();
     this.assertCredentials('signed read position');
     try {
-      const payload = await this.signedRequest<JsonObject>('GET', '/api/v1/position', INSTRUCTIONS.positionQuery, { symbol });
-      const netQuantity = Number(payload.netQuantity ?? payload.quantity ?? payload.positionQty ?? 0);
-      const entryPrice = Number(payload.entryPrice ?? payload.averageEntryPrice ?? 0);
-      const unrealizedPnl = Number(payload.unrealizedPnl ?? payload.pnl ?? 0);
+      const payload = await this.signedRequest<unknown>('GET', '/api/v1/position', INSTRUCTIONS.positionQuery, { symbol });
+      const positionRow = this.normalizePositionPayload(payload, symbol);
+      if (!positionRow) {
+        return { symbol, size: 0, entryPrice: 0, unrealizedPnl: 0 };
+      }
+      const netQuantity = Number(positionRow.netQuantity ?? positionRow.quantity ?? positionRow.positionQty ?? 0);
+      const entryPrice = Number(positionRow.entryPrice ?? positionRow.averageEntryPrice ?? 0);
+      const unrealizedPnl = Number(positionRow.unrealizedPnl ?? positionRow.pnlUnrealized ?? positionRow.pnl ?? 0);
       return { symbol, size: netQuantity, entryPrice, unrealizedPnl };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -389,6 +393,17 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
     return Object.entries(record)
       .filter(([, entry]) => typeof entry === 'object' && entry !== null)
       .map(([asset, entry]) => ({ asset, ...(entry as JsonObject) }));
+  }
+
+  private normalizePositionPayload(payload: unknown, symbol: string): JsonObject | undefined {
+    if (Array.isArray(payload)) {
+      const rows = payload.filter((entry): entry is JsonObject => typeof entry === 'object' && entry !== null);
+      return rows.find((entry) => String(entry.symbol ?? '') === symbol) ?? rows[0];
+    }
+    if (typeof payload !== 'object' || payload === null) {
+      return undefined;
+    }
+    return payload as JsonObject;
   }
 
   private normalizeCollateralSummary(payload: unknown): { netEquity?: number; netEquityAvailable?: number; collateral: JsonObject[] } | null {
