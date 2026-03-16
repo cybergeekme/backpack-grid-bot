@@ -6,6 +6,8 @@ pub mod planner;
 pub mod precision;
 pub mod reconcile;
 pub mod risk;
+pub mod service;
+pub mod state;
 
 pub use config::{AppConfig, GridMode};
 pub use domain::{GridLevel, OrderIntent, OrderSide, OrderType, PlannerOutput, Position, RiskDecision, RiskReason};
@@ -14,3 +16,5 @@ pub use planner::GridPlanner;
 pub use precision::{normalize_order_qty, normalize_position_size, order_precision_decimals, price_precision_decimals};
 pub use reconcile::{FillMetrics, FillSource, ReconcileEngine, ReconcileOutcome, ReconcileSnapshot, SyntheticFill};
 pub use risk::RiskEngine;
+pub use service::{GridBotService, ServiceCycleOutput};
+pub use state::{InMemoryStateStore, RuntimeState};
