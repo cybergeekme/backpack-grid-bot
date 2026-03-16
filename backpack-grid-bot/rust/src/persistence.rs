@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::{RuntimeState, ServiceCycleOutput};
+use crate::{observability::ShadowReport, RuntimeState, ServiceCycleOutput};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeCheckpoint {
@@ -18,11 +18,17 @@ pub struct RuntimeCheckpoint {
 #[derive(Debug, Clone)]
 pub struct JsonFilePersistence {
     path: PathBuf,
+    report_path: PathBuf,
 }
 
 impl JsonFilePersistence {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        let path = path.into();
+        let report_path = path
+            .parent()
+            .map(|p| p.join("shadow-report.json"))
+            .unwrap_or_else(|| PathBuf::from("shadow-report.json"));
+        Self { path, report_path }
     }
 
     pub fn from_env() -> Self {
@@ -63,8 +69,21 @@ impl JsonFilePersistence {
         Ok(Some(checkpoint))
     }
 
+    pub fn save_report(&self, report: &ShadowReport) -> Result<()> {
+        if let Some(parent) = self.report_path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create report dir {}", parent.display()))?;
+        }
+        let body = report.to_pretty_json()?;
+        fs::write(&self.report_path, body).with_context(|| format!("write report {}", self.report_path.display()))?;
+        Ok(())
+    }
+
     pub fn path(&self) -> &PathBuf {
         &self.path
+    }
+
+    pub fn report_path(&self) -> &PathBuf {
+        &self.report_path
     }
 }
 

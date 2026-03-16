@@ -2,7 +2,7 @@ use std::{thread, time::Duration};
 
 use anyhow::Result;
 
-use crate::{adapter::BackpackHttpClient, persistence::JsonFilePersistence, AppConfig, GridBotService, ServiceCycleOutput};
+use crate::{adapter::BackpackHttpClient, observability::ShadowReport, persistence::JsonFilePersistence, AppConfig, GridBotService, ServiceCycleOutput};
 
 #[derive(Debug, Clone)]
 pub struct ShadowRuntime {
@@ -44,8 +44,9 @@ impl ShadowRuntime {
         let mut remaining = iterations.unwrap_or(usize::MAX);
         while remaining > 0 {
             let cycle = self.run_once()?;
+            let report = ShadowReport::from_cycle(&self.config.symbol, &cycle);
             println!(
-                "shadow symbol={} mark_price={} desired={} cancels={} places={} matched={} synthetic_fill={} checkpoint={}",
+                "shadow symbol={} mark_price={} desired={} cancels={} places={} matched={} synthetic_fill={} checkpoint={} report={}",
                 self.config.symbol,
                 cycle.state.last_mid_price.unwrap_or_default(),
                 cycle.planner.desired_orders.len(),
@@ -54,7 +55,9 @@ impl ShadowRuntime {
                 cycle.reconciliation.diff.matched,
                 cycle.reconciliation.synthetic_fill.is_some(),
                 self.persistence.path().display(),
+                self.persistence.report_path().display(),
             );
+            println!("{}", report.to_pretty_json()?);
             remaining = remaining.saturating_sub(1);
             if remaining > 0 {
                 thread::sleep(self.interval);

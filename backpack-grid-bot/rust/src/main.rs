@@ -1,5 +1,5 @@
 use anyhow::Result;
-use backpack_grid_bot::ShadowRuntime;
+use backpack_grid_bot::{observability::ShadowReport, ShadowRuntime};
 
 fn main() -> Result<()> {
     let runtime = ShadowRuntime::from_env()?;
@@ -9,8 +9,9 @@ fn main() -> Result<()> {
 
     if once {
         let cycle = runtime.run_once()?;
+        let report = ShadowReport::from_cycle(&runtime.config.symbol, &cycle);
         println!(
-            "shadow symbol={} mark_price={} desired_orders={} cancels={} places={} matched={} synthetic_fill={} checkpoint={}",
+            "shadow symbol={} mark_price={} desired_orders={} cancels={} places={} matched={} synthetic_fill={} checkpoint={} report={}",
             runtime.config.symbol,
             cycle.state.last_mid_price.unwrap_or_default(),
             cycle.planner.desired_orders.len(),
@@ -19,7 +20,9 @@ fn main() -> Result<()> {
             cycle.reconciliation.diff.matched,
             cycle.reconciliation.synthetic_fill.is_some(),
             runtime.persistence.path().display(),
+            runtime.persistence.report_path().display(),
         );
+        println!("{}", report.to_pretty_json()?);
         return Ok(());
     }
 

@@ -2,6 +2,7 @@ pub mod adapter;
 pub mod config;
 pub mod domain;
 pub mod execution;
+pub mod observability;
 pub mod planner;
 pub mod precision;
 pub mod reconcile;
