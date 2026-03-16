@@ -592,6 +592,111 @@ test('service emits filled fallback during rebalance when position changed befor
   await service.stop();
 });
 
+test('service normalizes reconciliation fallback alert precision', async () => {
+  resetGridEnv();
+  process.env.GRID_LEVELS = '1';
+  process.env.GRID_SPACING_BPS = '50';
+  process.env.GRID_ORDER_SIZE = '0.003';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-fill-fallback-precision');
+  process.env.GRID_SERVICE_NAME = 'grid-fill-fallback-precision-test';
+  process.env.TELEGRAM_ALERTS_ENABLED = 'true';
+  process.env.TELEGRAM_ALERT_LEVEL = 'info';
+  process.env.TELEGRAM_NOTIFY_FILLS = 'true';
+
+  const delivered: AlertEvent[] = [];
+  const alerts = new AlertManager(
+    { enabled: true, minSeverity: 'info', dedupMs: 60_000 },
+    [{ notify: async (event) => void delivered.push(event) }]
+  );
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(100, config.symbol, 10_000);
+  const service = new GridTradingService(config, adapter, alerts);
+  await service.start();
+
+  const previousPosition: Position = {
+    symbol: config.symbol,
+    size: -0.006,
+    entryPrice: 2262.38,
+    unrealizedPnl: 0
+  };
+  const currentPosition: Position = {
+    symbol: config.symbol,
+    size: -0.009000000000000001,
+    entryPrice: 2255.45,
+    unrealizedPnl: 0
+  };
+
+  adapter.importCheckpoint({
+    currentPrice: 2252.48,
+    symbol: config.symbol,
+    openOrders: [
+      {
+        orderId: 'MOCK-SELL-1',
+        clientOrderId: 'grid-sell-1',
+        symbol: config.symbol,
+        side: 'sell',
+        type: 'limit',
+        price: 2252.48,
+        qty: 0.003,
+        filledQty: 0,
+        status: 'open',
+        postOnly: true,
+        reduceOnly: false,
+        ts: Date.now()
+      }
+    ],
+    recentFills: [],
+    position: previousPosition,
+    balance: { asset: 'USDC', total: 10000, available: 10000 },
+    nextId: 2
+  });
+
+  await service.reconcileWithExchange();
+  delivered.length = 0;
+
+  adapter.importCheckpoint({
+    currentPrice: 2252.48,
+    symbol: config.symbol,
+    openOrders: [
+      {
+        orderId: 'MOCK-SELL-2',
+        clientOrderId: 'grid-sell-2',
+        symbol: config.symbol,
+        side: 'sell',
+        type: 'limit',
+        price: 2252.48,
+        qty: 0.003,
+        filledQty: 0,
+        status: 'open',
+        postOnly: true,
+        reduceOnly: false,
+        ts: Date.now()
+      }
+    ],
+    recentFills: [],
+    position: currentPosition,
+    balance: { asset: 'USDC', total: 10000, available: 10000 },
+    nextId: 3
+  });
+
+  await service.reconcileWithExchange();
+
+  const fallbackFilledAlerts = delivered.filter(
+    (event) => event.title === 'Order filled' && event.details?.source === 'reconciliation_fallback'
+  );
+  assert.equal(fallbackFilledAlerts.length, 1);
+  assert.equal(fallbackFilledAlerts[0]?.details?.qty, 0.003);
+  assert.equal(fallbackFilledAlerts[0]?.details?.positionAfter, -0.009);
+  assert.equal(fallbackFilledAlerts[0]?.details?.entryPriceAfter, 2255.45);
+  assert.equal(fallbackFilledAlerts[0]?.details?.realizedPnl, 0);
+  assert.equal(fallbackFilledAlerts[0]?.details?.closedQty, 0);
+
+  await service.stop();
+});
+
 test('service normalizes short-only reduce-buy qty to configured order-size precision', async () => {
   resetGridEnv();
   process.env.GRID_LEVELS = '100';

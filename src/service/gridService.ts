@@ -41,6 +41,17 @@ interface FillAlertMetrics {
   openingFill?: boolean;
 }
 
+interface NormalizedFillAlertDetails {
+  price?: number;
+  qty: number;
+  fee: number;
+  realizedPnl?: number;
+  positionAfter?: number;
+  entryPriceAfter?: number;
+  closedQty?: number;
+  openingFill?: boolean;
+}
+
 interface InferredFillContext {
   side: 'buy' | 'sell';
   qty: number;
@@ -461,6 +472,7 @@ export class GridTradingService {
           positionAfter: fillMetrics.positionAfter
         });
         if (this.config.telegramNotifyFills) {
+          const normalizedDetails = this.normalizeFillAlertDetails(event.fill.price, event.fill.qty, fillMetrics);
           this.emitAlert({
             key: `fill:${event.fill.orderId}:${event.fill.ts}`,
             severity: 'info',
@@ -469,14 +481,14 @@ export class GridTradingService {
             details: {
               symbol: event.fill.symbol,
               side: event.fill.side,
-              price: event.fill.price,
-              qty: event.fill.qty,
-              fee: fillMetrics.fee,
-              realizedPnl: fillMetrics.realizedPnl,
-              positionAfter: fillMetrics.positionAfter,
-              entryPriceAfter: fillMetrics.entryPriceAfter,
-              closedQty: fillMetrics.closedQty,
-              openingFill: fillMetrics.openingFill,
+              price: normalizedDetails.price,
+              qty: normalizedDetails.qty,
+              fee: normalizedDetails.fee,
+              realizedPnl: normalizedDetails.realizedPnl,
+              positionAfter: normalizedDetails.positionAfter,
+              entryPriceAfter: normalizedDetails.entryPriceAfter,
+              closedQty: normalizedDetails.closedQty,
+              openingFill: normalizedDetails.openingFill,
               orderId: event.fill.orderId,
               clientOrderId: event.fill.clientOrderId
             },
@@ -531,14 +543,19 @@ export class GridTradingService {
       ts: Date.now()
     };
     const fillMetrics = this.estimateFillAlertMetrics(previousPosition, syntheticFill);
+    const normalizedDetails = this.normalizeFillAlertDetails(inferred.price, syntheticFill.qty, {
+      ...fillMetrics,
+      positionAfter: currentPosition.size,
+      entryPriceAfter: currentPosition.entryPrice
+    });
     this.logger.info('Emitting reconciliation fill fallback alert.', {
       symbol: this.config.symbol,
       side: inferred.side,
-      qty: inferred.qty,
-      price: inferred.price,
+      qty: normalizedDetails.qty,
+      price: normalizedDetails.price,
       orderId: inferred.orderId,
       positionBefore: previousPosition?.size,
-      positionAfter: currentPosition.size
+      positionAfter: normalizedDetails.positionAfter
     });
     this.emitAlert({
       key: `fill-fallback:${syntheticFill.orderId}:${syntheticFill.ts}`,
@@ -548,14 +565,14 @@ export class GridTradingService {
       details: {
         symbol: syntheticFill.symbol,
         side: syntheticFill.side,
-        price: inferred.price,
-        qty: syntheticFill.qty,
-        fee: fillMetrics.fee,
-        realizedPnl: fillMetrics.realizedPnl,
-        positionAfter: currentPosition.size,
-        entryPriceAfter: currentPosition.entryPrice,
-        closedQty: fillMetrics.closedQty,
-        openingFill: fillMetrics.openingFill,
+        price: normalizedDetails.price,
+        qty: normalizedDetails.qty,
+        fee: normalizedDetails.fee,
+        realizedPnl: normalizedDetails.realizedPnl,
+        positionAfter: normalizedDetails.positionAfter,
+        entryPriceAfter: normalizedDetails.entryPriceAfter,
+        closedQty: normalizedDetails.closedQty,
+        openingFill: normalizedDetails.openingFill,
         orderId: syntheticFill.orderId,
         clientOrderId: syntheticFill.clientOrderId,
         source: 'reconciliation_fallback'
@@ -598,6 +615,39 @@ export class GridTradingService {
       : 0;
   }
 
+  private pricePrecisionDecimals(value?: number): number {
+    const normalizedPrice = String(value ?? 0);
+    return normalizedPrice.includes('.')
+      ? normalizedPrice.split('.')[1]?.length ?? 0
+      : 0;
+  }
+
+  private normalizeDisplayNumber(value: number | undefined, decimals: number): number | undefined {
+    if (value === undefined || !Number.isFinite(value)) return value;
+    if (decimals <= 0) return Math.round(value);
+    return Number(value.toFixed(decimals));
+  }
+
+  private normalizePnlDisplay(value: number | undefined): number | undefined {
+    if (value === undefined || !Number.isFinite(value)) return value;
+    return Number(value.toFixed(8));
+  }
+
+  private normalizeFillAlertDetails(price: number | undefined, qty: number, metrics: FillAlertMetrics): NormalizedFillAlertDetails {
+    const qtyDecimals = this.orderPrecisionDecimals();
+    const priceDecimals = this.pricePrecisionDecimals(price ?? metrics.entryPriceAfter);
+    return {
+      price: this.normalizeDisplayNumber(price, priceDecimals),
+      qty: this.normalizeDisplayNumber(qty, qtyDecimals) ?? qty,
+      fee: this.normalizePnlDisplay(metrics.fee) ?? 0,
+      realizedPnl: this.normalizePnlDisplay(metrics.realizedPnl),
+      positionAfter: this.normalizeDisplayNumber(metrics.positionAfter, qtyDecimals),
+      entryPriceAfter: this.normalizeDisplayNumber(metrics.entryPriceAfter, priceDecimals),
+      closedQty: this.normalizeDisplayNumber(metrics.closedQty, qtyDecimals),
+      openingFill: metrics.openingFill
+    };
+  }
+
   private normalizeOrderQty(qty: number): number {
     const decimals = this.orderPrecisionDecimals();
     if (decimals <= 0) {
@@ -618,7 +668,7 @@ export class GridTradingService {
     const beforeSize = Number(positionBefore?.size ?? 0);
     const beforeEntry = Number(positionBefore?.entryPrice ?? 0);
     const signedFillQty = fill.side === 'buy' ? fill.qty : -fill.qty;
-    const afterSize = beforeSize + signedFillQty;
+    const afterSize = this.normalizePositionSize(beforeSize + signedFillQty);
 
     if (beforeSize === 0) {
       return {
