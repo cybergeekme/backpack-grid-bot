@@ -126,7 +126,8 @@ export class GridTradingService {
     for (const level of activeLevels) {
       const isShortOnlyReduceBuy = this.config.gridMode === 'short_only' && level.side === 'buy';
       const maxReducibleQty = isShortOnlyReduceBuy ? Math.max(0, -plannedPosition) : undefined;
-      const qty = isShortOnlyReduceBuy ? Math.min(level.qty, maxReducibleQty ?? 0) : level.qty;
+      const rawQty = isShortOnlyReduceBuy ? Math.min(level.qty, maxReducibleQty ?? 0) : level.qty;
+      const qty = this.normalizeOrderQty(rawQty);
       if (!(qty > 0)) continue;
 
       const projectedPosition: Position = {
@@ -585,6 +586,17 @@ export class GridTradingService {
       orderId: candidate?.orderId,
       clientOrderId: candidate?.clientOrderId
     };
+  }
+
+  private normalizeOrderQty(qty: number): number {
+    const normalizedOrderSize = String(this.config.orderSize);
+    const decimals = normalizedOrderSize.includes('.')
+      ? normalizedOrderSize.split('.')[1]?.length ?? 0
+      : 0;
+    if (decimals <= 0) {
+      return Math.round(qty);
+    }
+    return Number(qty.toFixed(decimals));
   }
 
   private estimateFillAlertMetrics(positionBefore: Position | undefined, fill: Fill): FillAlertMetrics {

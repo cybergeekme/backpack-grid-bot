@@ -544,6 +544,52 @@ test('service emits reconciliation fallback filled alerts when position changes 
   await service.stop();
 });
 
+test('service normalizes short-only reduce-buy qty to configured order-size precision', async () => {
+  resetGridEnv();
+  process.env.GRID_LEVELS = '100';
+  process.env.GRID_ORDER_SIZE = '0.003';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_KILL_SWITCH = 'false';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-short-only-qty-precision');
+  process.env.GRID_SERVICE_NAME = 'grid-short-only-qty-precision-test';
+  process.env.GRID_MIN_PRICE = '1500';
+  process.env.GRID_MAX_PRICE = '2300';
+  process.env.GRID_MODE = 'short_only';
+  process.env.GRID_ACTIVE_LEVELS = '5';
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(1900, config.symbol, 10_000);
+  const service = new GridTradingService(config, adapter);
+  await service.start();
+
+  const noisyPosition: Position = {
+    symbol: config.symbol,
+    size: -0.009000000000000001,
+    entryPrice: 1900,
+    unrealizedPnl: 0
+  };
+  service.snapshot().position = noisyPosition;
+  adapter.importCheckpoint({
+    currentPrice: 1900,
+    symbol: config.symbol,
+    openOrders: [],
+    recentFills: [],
+    position: noisyPosition,
+    balance: { asset: 'USDC', total: 10000, available: 10000 },
+    nextId: 1
+  });
+
+  await service.rebalance();
+
+  const buyOrders = service.snapshot().workingOrders.filter((order) => order.side === 'buy');
+  assert.ok(buyOrders.length >= 1);
+  assert.ok(buyOrders.every((order) => Number.isInteger(order.qty * 1000)));
+  assert.ok(buyOrders.every((order) => String(order.qty).split('.')[1]?.length ?? 0 <= 3));
+
+  await service.stop();
+});
+
 test('runtime checkpoints stay compact and recover from persisted orders instead of embedding them', async () => {
   process.env.GRID_LEVELS = '1';
   process.env.GRID_SPACING_BPS = '50';
