@@ -43,6 +43,9 @@ pub struct CycleSummaryRecord {
     pub executed_cancel_orders: usize,
     pub executed_keep_orders: usize,
     pub executed_final_orders: usize,
+    pub projection_matched_orders: usize,
+    pub projection_only_orders: usize,
+    pub exchange_only_orders: usize,
     pub matched_orders: usize,
     pub synthetic_fill: bool,
 }
@@ -158,6 +161,7 @@ impl JsonFilePersistence {
             .append(true)
             .open(&self.cycle_summary_path)
             .with_context(|| format!("open cycle summary {}", self.cycle_summary_path.display()))?;
+        let report = ShadowReport::from_cycle(symbol.to_string(), cycle);
         let record = CycleSummaryRecord {
             symbol: symbol.to_string(),
             recorded_at_unix_ms: now_unix_ms(),
@@ -170,11 +174,14 @@ impl JsonFilePersistence {
             place_orders: cycle.execution.place.len(),
             cancel_orders: cycle.execution.cancel.len(),
             keep_orders: cycle.execution.keep.len(),
-            executed_mode: cycle.executed.as_ref().map(|executed| format!("{:?}", executed.mode).to_ascii_lowercase()),
-            executed_place_orders: cycle.executed.as_ref().map(|executed| executed.placed.len()).unwrap_or(0),
-            executed_cancel_orders: cycle.executed.as_ref().map(|executed| executed.cancelled.len()).unwrap_or(0),
-            executed_keep_orders: cycle.executed.as_ref().map(|executed| executed.retained.len()).unwrap_or(0),
-            executed_final_orders: cycle.executed.as_ref().map(|executed| executed.final_orders.len()).unwrap_or(0),
+            executed_mode: report.execution_summary.mode.clone(),
+            executed_place_orders: report.execution_summary.placed_count,
+            executed_cancel_orders: report.execution_summary.cancelled_count,
+            executed_keep_orders: report.execution_summary.retained_count,
+            executed_final_orders: report.execution_summary.final_order_count,
+            projection_matched_orders: report.projection_summary.matched_count,
+            projection_only_orders: report.projection_summary.only_in_projection_count,
+            exchange_only_orders: report.projection_summary.only_on_exchange_count,
             matched_orders: cycle.reconciliation.diff.matched,
             synthetic_fill: cycle.reconciliation.synthetic_fill.is_some(),
         };
@@ -304,6 +311,6 @@ mod tests {
         assert!(body.contains("event_count"));
         assert!(body.contains("service_state"));
         assert!(body.contains("executed_mode"));
-        assert!(body.contains("dryrun"));
+        assert!(body.contains("projection_matched_orders"));
     }
 }
