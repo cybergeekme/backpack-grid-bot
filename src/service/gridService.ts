@@ -323,6 +323,27 @@ export class GridTradingService {
           status: event.order.status,
           filledQty: event.order.filledQty
         });
+        if (this.config.telegramNotifyOrderEvents) {
+          this.emitAlert({
+            key: `order:${event.order.orderId}:${event.order.status}:${event.order.ts}`,
+            severity: event.order.status === 'rejected' ? 'warn' : 'info',
+            title: `Order ${event.order.status}`,
+            message: `${event.order.side.toUpperCase()} ${event.order.symbol} order is now ${event.order.status}.`,
+            details: {
+              symbol: event.order.symbol,
+              side: event.order.side,
+              status: event.order.status,
+              price: event.order.price,
+              qty: event.order.qty,
+              filledQty: event.order.filledQty,
+              reduceOnly: event.order.reduceOnly,
+              postOnly: event.order.postOnly,
+              orderId: event.order.orderId,
+              clientOrderId: event.order.clientOrderId
+            },
+            dedupMs: 0
+          });
+        }
         return;
       case 'position':
         this.oms.applyPositionUpdate(event.position);

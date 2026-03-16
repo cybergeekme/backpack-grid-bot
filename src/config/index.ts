@@ -36,6 +36,7 @@ export interface AppConfig {
   telegramAlertLevel: 'info' | 'warn' | 'critical';
   telegramAlertDedupMs: number;
   telegramNotifyFills: boolean;
+  telegramNotifyOrderEvents: boolean;
 }
 
 function num(name: string, fallback: number): number {
@@ -114,6 +115,7 @@ export function loadConfig(): AppConfig {
     telegramChatId: process.env.TELEGRAM_CHAT_ID,
     telegramAlertLevel: alertLevel('TELEGRAM_ALERT_LEVEL', 'warn'),
     telegramAlertDedupMs: Math.max(0, Math.floor(num('TELEGRAM_ALERT_DEDUP_MS', 300000))),
-    telegramNotifyFills: bool('TELEGRAM_NOTIFY_FILLS', false)
+    telegramNotifyFills: bool('TELEGRAM_NOTIFY_FILLS', false),
+    telegramNotifyOrderEvents: bool('TELEGRAM_NOTIFY_ORDER_EVENTS', false)
   };
 }

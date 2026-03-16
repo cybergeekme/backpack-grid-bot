@@ -78,6 +78,7 @@ Optional:
 - `TELEGRAM_ALERT_LEVEL=warn` minimum severity to send: `info`, `warn`, `critical`
 - `TELEGRAM_ALERT_DEDUP_MS=300000` per-alert dedup window in milliseconds
 - `TELEGRAM_NOTIFY_FILLS=false` set true to send fill notifications in addition to safety alerts
+- `TELEGRAM_NOTIFY_ORDER_EVENTS=false` set true to push every order status update (`new`/`open`/`cancelled`/`rejected`/etc.) to the Telegram alert bot; this is intentionally noisy and disables dedup for those order-event alerts
 - `BACKPACK_ENABLE_LIVE=false` keeps Backpack in read-only mode; `true` enables order placement/cancel mutations
 - `BACKPACK_ENABLE_WS=true` to enable the Backpack WS client when live mode is enabled (default: true)
 - `BACKPACK_API_KEY=<base64 public key>`

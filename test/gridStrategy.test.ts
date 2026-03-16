@@ -297,6 +297,47 @@ test('alert manager deduplicates repeated events and swallows sink failures', as
   assert.equal(delivered[1]?.key, 'other-key');
 });
 
+test('service emits Telegram alerts for each order status update when enabled', async () => {
+  resetGridEnv();
+  process.env.GRID_LEVELS = '1';
+  process.env.GRID_SPACING_BPS = '50';
+  process.env.GRID_ORDER_SIZE = '0.01';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-order-alerts');
+  process.env.GRID_SERVICE_NAME = 'grid-order-alerts-test';
+  process.env.TELEGRAM_ALERTS_ENABLED = 'true';
+  process.env.TELEGRAM_ALERT_LEVEL = 'info';
+  process.env.TELEGRAM_NOTIFY_ORDER_EVENTS = 'true';
+
+  const delivered: AlertEvent[] = [];
+  const alerts = new AlertManager(
+    { enabled: true, minSeverity: 'info', dedupMs: 60_000 },
+    [{ notify: async (event) => void delivered.push(event) }]
+  );
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(100, config.symbol, 10_000);
+  const service = new GridTradingService(config, adapter, alerts);
+  await service.start();
+  await service.rebalance();
+
+  const state = service.snapshot();
+  const openOrder = state.workingOrders[0];
+  assert.ok(openOrder);
+
+  await adapter.cancelOrder(config.symbol, openOrder.orderId);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const orderAlerts = delivered.filter((event) => event.key.startsWith('order:'));
+  assert.ok(orderAlerts.length >= 3);
+  assert.ok(orderAlerts.some((event) => event.title === 'Order open'));
+  assert.ok(orderAlerts.some((event) => event.title === 'Order cancelled'));
+  assert.ok(orderAlerts.every((event) => event.dedupMs === 0));
+
+  await service.stop();
+});
+
 test('runtime checkpoints stay compact and recover from persisted orders instead of embedding them', async () => {
   process.env.GRID_LEVELS = '1';
   process.env.GRID_SPACING_BPS = '50';
