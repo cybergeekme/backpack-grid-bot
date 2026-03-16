@@ -15,11 +15,27 @@ pub struct ShadowOrderView {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShadowEventSummary {
+    pub event_count: usize,
+    pub latest_messages: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShadowHealthSummary {
+    pub service_state: String,
+    pub pause_reason: Option<String>,
+    pub issues: Vec<String>,
+    pub consecutive_errors: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShadowReport {
     pub symbol: String,
     pub mark_price: Decimal,
     pub health: RuntimeHealth,
+    pub health_summary: ShadowHealthSummary,
     pub events: Vec<RuntimeEvent>,
+    pub event_summary: ShadowEventSummary,
     pub desired_orders: Vec<ShadowOrderView>,
     pub active_levels: Vec<GridLevel>,
     pub place_orders: Vec<ShadowOrderView>,
@@ -39,7 +55,17 @@ impl ShadowReport {
             symbol: symbol.into(),
             mark_price: cycle.state.last_mid_price.unwrap_or_default(),
             health: cycle.state.health.clone(),
+            health_summary: ShadowHealthSummary {
+                service_state: format!("{:?}", cycle.state.health.service_state),
+                pause_reason: cycle.state.health.pause_reason.map(|reason| format!("{:?}", reason)),
+                issues: cycle.state.health.issues.iter().map(|issue| format!("{:?}", issue)).collect(),
+                consecutive_errors: cycle.state.health.consecutive_errors,
+            },
             events: cycle.events.clone(),
+            event_summary: ShadowEventSummary {
+                event_count: cycle.events.len(),
+                latest_messages: cycle.events.iter().take(5).map(|event| event.message.clone()).collect(),
+            },
             desired_orders: cycle.planner.desired_orders.iter().map(order_view_from_intent).collect(),
             active_levels: cycle.planner.active_levels.clone(),
             place_orders: cycle.execution.place.iter().map(order_view_from_intent).collect(),
@@ -121,5 +147,7 @@ mod tests {
         let json = report.to_pretty_json().unwrap();
         assert!(json.contains("ETH_USDC_PERP"));
         assert!(json.contains("2260.4"));
+        assert!(json.contains("health_summary"));
+        assert!(json.contains("event_summary"));
     }
 }

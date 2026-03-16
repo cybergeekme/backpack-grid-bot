@@ -37,6 +37,8 @@ impl ShadowRuntime {
         }
         let cycle = service.plan_cycle_from_snapshot(snapshot);
         self.persistence.save_cycle(&cycle, &self.config.symbol)?;
+        let report = ShadowReport::from_cycle(&self.config.symbol, &cycle);
+        self.persistence.save_report(&report)?;
         Ok(cycle)
     }
 
@@ -46,9 +48,13 @@ impl ShadowRuntime {
             let cycle = self.run_once()?;
             let report = ShadowReport::from_cycle(&self.config.symbol, &cycle);
             println!(
-                "shadow symbol={} mark_price={} desired={} cancels={} places={} matched={} synthetic_fill={} checkpoint={} report={}",
+                "shadow symbol={} mark_price={} state={:?} pause_reason={:?} issues={:?} events={} desired={} cancels={} places={} matched={} synthetic_fill={} checkpoint={} report={}",
                 self.config.symbol,
                 cycle.state.last_mid_price.unwrap_or_default(),
+                cycle.state.health.service_state,
+                cycle.state.health.pause_reason,
+                cycle.state.health.issues,
+                cycle.events.len(),
                 cycle.planner.desired_orders.len(),
                 cycle.execution.cancel.len(),
                 cycle.execution.place.len(),
@@ -57,6 +63,9 @@ impl ShadowRuntime {
                 self.persistence.path().display(),
                 self.persistence.report_path().display(),
             );
+            if let Some(message) = report.event_summary.latest_messages.first() {
+                println!("shadow latest_event={}", message);
+            }
             println!("{}", report.to_pretty_json()?);
             remaining = remaining.saturating_sub(1);
             if remaining > 0 {
