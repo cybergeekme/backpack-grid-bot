@@ -10,9 +10,11 @@ import type {
   AdapterEvent,
   CheckpointCapableAdapter,
   ExchangeAdapter,
+  Fill,
   GridLevel,
   LeverageCapableAdapter,
   OrderRequest,
+  Position,
   ReconciliationEvent,
   RiskEvent,
   RuntimeCheckpoint,
@@ -27,6 +29,15 @@ function hasCheckpointSupport(adapter: ExchangeAdapter): adapter is ExchangeAdap
 function hasLeverageValidation(adapter: ExchangeAdapter): adapter is ExchangeAdapter & LeverageCapableAdapter {
   const candidate = adapter as unknown as LeverageCapableAdapter;
   return typeof candidate.validateLeverage === 'function';
+}
+
+interface FillAlertMetrics {
+  fee: number;
+  realizedPnl?: number;
+  positionAfter?: number;
+  entryPriceAfter?: number;
+  closedQty?: number;
+  openingFill?: boolean;
 }
 
 export class GridTradingService {
@@ -400,14 +411,19 @@ export class GridTradingService {
           entryPrice: event.position.entryPrice
         });
         return;
-      case 'fill':
+      case 'fill': {
+        const positionBeforeFill = this.state.get().position;
+        const fillMetrics = this.estimateFillAlertMetrics(positionBeforeFill, event.fill);
         this.state.pushFill(event.fill);
         this.persistence.persistFill(event.fill);
         this.persistRuntimeCheckpoint('adapter_fill_update');
         this.logger.info('Processed adapter fill update.', {
           orderId: event.fill.orderId,
           qty: event.fill.qty,
-          price: event.fill.price
+          price: event.fill.price,
+          fee: event.fill.fee,
+          realizedPnl: fillMetrics.realizedPnl,
+          positionAfter: fillMetrics.positionAfter
         });
         if (this.config.telegramNotifyFills) {
           this.emitAlert({
@@ -420,13 +436,20 @@ export class GridTradingService {
               side: event.fill.side,
               price: event.fill.price,
               qty: event.fill.qty,
-              fee: event.fill.fee,
-              orderId: event.fill.orderId
+              fee: fillMetrics.fee,
+              realizedPnl: fillMetrics.realizedPnl,
+              positionAfter: fillMetrics.positionAfter,
+              entryPriceAfter: fillMetrics.entryPriceAfter,
+              closedQty: fillMetrics.closedQty,
+              openingFill: fillMetrics.openingFill,
+              orderId: event.fill.orderId,
+              clientOrderId: event.fill.clientOrderId
             },
             dedupMs: 0
           });
         }
         return;
+      }
       case 'connection':
         this.persistence.persistCheckpoint('connection', { ...event, ts: Date.now() });
         this.logger.info('Adapter connection event.', {
@@ -450,6 +473,77 @@ export class GridTradingService {
       ts: Date.now()
     };
     this.persistence.persistCheckpoint('runtime', checkpoint);
+  }
+
+  private estimateFillAlertMetrics(positionBefore: Position | undefined, fill: Fill): FillAlertMetrics {
+    const fee = Number(fill.fee ?? 0);
+    const beforeSize = Number(positionBefore?.size ?? 0);
+    const beforeEntry = Number(positionBefore?.entryPrice ?? 0);
+    const signedFillQty = fill.side === 'buy' ? fill.qty : -fill.qty;
+    const afterSize = beforeSize + signedFillQty;
+
+    if (beforeSize === 0) {
+      return {
+        fee,
+        realizedPnl: 0,
+        positionAfter: afterSize,
+        entryPriceAfter: fill.price,
+        closedQty: 0,
+        openingFill: true
+      };
+    }
+
+    const reducing = Math.sign(beforeSize) !== Math.sign(signedFillQty);
+    const closedQty = reducing ? Math.min(Math.abs(beforeSize), Math.abs(signedFillQty)) : 0;
+    const realizedPnl = beforeSize > 0
+      ? (fill.price - beforeEntry) * closedQty
+      : (beforeEntry - fill.price) * closedQty;
+
+    if (!reducing) {
+      const totalAbs = Math.abs(beforeSize) + Math.abs(signedFillQty);
+      const entryPriceAfter = totalAbs === 0
+        ? 0
+        : ((beforeEntry * Math.abs(beforeSize)) + (fill.price * Math.abs(signedFillQty))) / totalAbs;
+      return {
+        fee,
+        realizedPnl: 0,
+        positionAfter: afterSize,
+        entryPriceAfter,
+        closedQty: 0,
+        openingFill: true
+      };
+    }
+
+    if (afterSize === 0) {
+      return {
+        fee,
+        realizedPnl,
+        positionAfter: 0,
+        entryPriceAfter: 0,
+        closedQty,
+        openingFill: false
+      };
+    }
+
+    if (Math.sign(afterSize) === Math.sign(beforeSize)) {
+      return {
+        fee,
+        realizedPnl,
+        positionAfter: afterSize,
+        entryPriceAfter: beforeEntry,
+        closedQty,
+        openingFill: false
+      };
+    }
+
+    return {
+      fee,
+      realizedPnl,
+      positionAfter: afterSize,
+      entryPriceAfter: fill.price,
+      closedQty,
+      openingFill: false
+    };
   }
 
   private emitAlert(event: Parameters<AlertManager['notify']>[0]): void {

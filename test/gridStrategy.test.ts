@@ -370,6 +370,70 @@ test('service emits Telegram alerts for REST-placed orders during grid sync even
   await service.stop();
 });
 
+test('service emits fill alerts with fee and realized pnl when enabled', async () => {
+  resetGridEnv();
+  process.env.GRID_LEVELS = '1';
+  process.env.GRID_SPACING_BPS = '50';
+  process.env.GRID_ORDER_SIZE = '0.01';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-fill-alerts');
+  process.env.GRID_SERVICE_NAME = 'grid-fill-alerts-test';
+  process.env.TELEGRAM_ALERTS_ENABLED = 'true';
+  process.env.TELEGRAM_ALERT_LEVEL = 'info';
+  process.env.TELEGRAM_NOTIFY_FILLS = 'true';
+
+  const delivered: AlertEvent[] = [];
+  const alerts = new AlertManager(
+    { enabled: true, minSeverity: 'info', dedupMs: 60_000 },
+    [{ notify: async (event) => void delivered.push(event) }]
+  );
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(100, config.symbol, 10_000);
+  const service = new GridTradingService(config, adapter, alerts);
+  await service.start();
+
+  await adapter.placeOrder({
+    clientOrderId: 'open-short',
+    symbol: config.symbol,
+    side: 'sell',
+    type: 'limit',
+    price: 101,
+    qty: 0.01,
+    postOnly: true,
+    reduceOnly: false
+  });
+  adapter.movePrice(101);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  await adapter.placeOrder({
+    clientOrderId: 'close-short',
+    symbol: config.symbol,
+    side: 'buy',
+    type: 'limit',
+    price: 99,
+    qty: 0.01,
+    postOnly: true,
+    reduceOnly: false
+  });
+  adapter.movePrice(99);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const fillAlerts = delivered.filter((event) => event.title === 'Order fill');
+  assert.equal(fillAlerts.length, 2);
+  assert.equal(fillAlerts[0]?.details?.openingFill, true);
+  assert.equal(fillAlerts[0]?.details?.realizedPnl, 0);
+  assert.equal(fillAlerts[0]?.details?.positionAfter, -0.01);
+  assert.equal(fillAlerts[1]?.details?.openingFill, false);
+  assert.equal(fillAlerts[1]?.details?.closedQty, 0.01);
+  assert.equal(fillAlerts[1]?.details?.positionAfter, 0);
+  assert.equal(fillAlerts[1]?.details?.realizedPnl, 0.02);
+  assert.ok(Number(fillAlerts[1]?.details?.fee) > 0);
+
+  await service.stop();
+});
+
 test('runtime checkpoints stay compact and recover from persisted orders instead of embedding them', async () => {
   process.env.GRID_LEVELS = '1';
   process.env.GRID_SPACING_BPS = '50';
