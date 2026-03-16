@@ -8,7 +8,7 @@ use crate::{
     planner::GridPlanner,
     reconcile::{ReconcileEngine, ReconcileOutcome, ReconcileSnapshot},
     state::{InMemoryStateStore, RuntimeState},
-    AppConfig, PlannerOutput, Position,
+    AppConfig, OrderIntent, PlannerOutput, Position,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,7 +131,14 @@ impl GridBotService {
             self.state.push_event(event, 200);
         }
 
-        let health = build_runtime_health(mid_price, &current_position, &execution_plan, &reconciliation);
+        let health = build_runtime_health(
+            mid_price,
+            &current_position,
+            &self.state.get().working_orders,
+            executed.as_ref(),
+            &execution_plan,
+            &reconciliation,
+        );
         self.state.set_health(health);
 
         ServiceCycleOutput {
@@ -175,7 +182,7 @@ fn build_runtime_events(
 ) -> Vec<RuntimeEvent> {
     let mut events = Vec::new();
 
-    let next_service_state = derive_service_state(execution, reconciliation);
+    let next_service_state = derive_service_state(executed, execution, reconciliation, false);
     if next_service_state != previous_service_state {
         events.push(RuntimeEvent::service_state_changed(
             next_service_state,
@@ -237,15 +244,21 @@ fn build_runtime_events(
 fn build_runtime_health(
     mid_price: Decimal,
     current_position: &Position,
+    current_orders: &[ExistingOrder],
+    executed: Option<&ExecutedPlan>,
     execution: &ExecutionPlan,
     reconciliation: &ReconcileOutcome,
 ) -> RuntimeHealth {
+    let projection_drift = projection_drift_detected(current_orders, executed);
     let mut issues = Vec::new();
     if reconciliation.synthetic_fill.is_some() {
         issues.push(HealthIssue::SyntheticFillObserved);
     }
     if !reconciliation.diff.missing_on_exchange.is_empty() || !reconciliation.diff.unexpected_on_exchange.is_empty() {
         issues.push(HealthIssue::OpenOrderMismatch);
+    }
+    if projection_drift {
+        issues.push(HealthIssue::ProjectionDriftDetected);
     }
     if current_position.symbol.is_empty() {
         issues.push(HealthIssue::PositionMissing);
@@ -254,16 +267,28 @@ fn build_runtime_health(
         issues.push(HealthIssue::MarkPriceMissing);
     }
 
-    let service_state = derive_service_state(execution, reconciliation);
+    let service_state = derive_service_state(executed, execution, reconciliation, projection_drift);
     let mut health = RuntimeHealth::default();
     health.mark_success(service_state, issues, Some(mid_price));
     health
 }
 
-fn derive_service_state(execution: &ExecutionPlan, reconciliation: &ReconcileOutcome) -> ServiceState {
-    if !reconciliation.diff.missing_on_exchange.is_empty() || !reconciliation.diff.unexpected_on_exchange.is_empty() {
+fn derive_service_state(
+    executed: Option<&ExecutedPlan>,
+    execution: &ExecutionPlan,
+    reconciliation: &ReconcileOutcome,
+    projection_drift: bool,
+) -> ServiceState {
+    if projection_drift
+        || !reconciliation.diff.missing_on_exchange.is_empty()
+        || !reconciliation.diff.unexpected_on_exchange.is_empty()
+    {
         ServiceState::Degraded
-    } else if execution.place.is_empty() && execution.cancel.is_empty() && execution.keep.is_empty() {
+    } else if execution.place.is_empty()
+        && execution.cancel.is_empty()
+        && execution.keep.is_empty()
+        && executed.is_none()
+    {
         ServiceState::Starting
     } else {
         ServiceState::Active
@@ -276,6 +301,35 @@ fn pause_reason_message(reason: PauseReason, mid_price: Decimal) -> String {
         PauseReason::PriceOutOfRange => format!("grid paused: mark price {mid_price} out of configured range"),
         PauseReason::Manual => "grid paused manually".to_string(),
     }
+}
+
+fn projection_drift_detected(current_orders: &[ExistingOrder], executed: Option<&ExecutedPlan>) -> bool {
+    let Some(executed) = executed else {
+        return false;
+    };
+
+    let current_keys = current_orders
+        .iter()
+        .map(|order| order_compare_key(&order.intent))
+        .collect::<std::collections::BTreeSet<_>>();
+    let projected_keys = executed
+        .final_orders
+        .iter()
+        .map(|order| order_compare_key(&order.intent))
+        .collect::<std::collections::BTreeSet<_>>();
+
+    current_keys != projected_keys
+}
+
+fn order_compare_key(intent: &OrderIntent) -> String {
+    format!(
+        "{:?}:{}:{}:{}:{}",
+        intent.side,
+        intent.price.normalize(),
+        intent.qty.normalize(),
+        intent.reduce_only,
+        intent.post_only
+    )
 }
 
 fn qty_epsilon(order_size: &Decimal) -> Decimal {
@@ -351,10 +405,13 @@ mod tests {
                 entry_price: dec!(2255.45),
                 unrealized_pnl: dec!(0),
             },
-            vec![],
+            vec![existing("stale-current", OrderSide::Sell, dec!(2268.32), dec!(0.003), false)],
         );
 
         assert_eq!(out.state.health.service_state, ServiceState::Degraded);
+        assert!(out.state.health.issues.contains(&HealthIssue::SyntheticFillObserved));
+        assert!(out.state.health.issues.contains(&HealthIssue::OpenOrderMismatch));
+        assert!(out.state.health.issues.contains(&HealthIssue::ProjectionDriftDetected));
         assert!(!out.execution.place.is_empty());
         assert!(out.executed.is_some());
         assert!(out.events.iter().any(|event| event.kind == RuntimeEventKind::OrderPlanned));

@@ -98,7 +98,12 @@ impl ShadowReport {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let actual_open_orders = cycle.execution.keep.iter().map(|o| order_view_from_intent(&o.intent)).collect::<Vec<_>>();
+        let actual_open_orders = cycle
+            .state
+            .working_orders
+            .iter()
+            .map(|o| order_view_from_intent(&o.intent))
+            .collect::<Vec<_>>();
         let (projection_only_orders, exchange_only_orders, matched_count) = compare_orders(&executed_final_orders, &actual_open_orders);
 
         Self {
@@ -308,7 +313,7 @@ mod tests {
             reconciliation: ReconcileOutcome::default(),
             events: vec![],
             state: RuntimeState {
-                working_orders: vec![],
+                working_orders: vec![existing(dec!(2268.32))],
                 recent_fills: vec![],
                 recent_events: vec![],
                 position: Some(Position {

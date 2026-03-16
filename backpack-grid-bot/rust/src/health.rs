@@ -23,6 +23,7 @@ pub enum PauseReason {
 pub enum HealthIssue {
     SyntheticFillObserved,
     OpenOrderMismatch,
+    ProjectionDriftDetected,
     PositionMissing,
     MarkPriceMissing,
 }
@@ -101,10 +102,17 @@ mod tests {
         assert_eq!(health.service_state, ServiceState::Degraded);
         assert_eq!(health.consecutive_errors, 1);
 
-        health.mark_success(ServiceState::Active, vec![HealthIssue::SyntheticFillObserved], Some(dec!(2260.4)));
-        assert_eq!(health.service_state, ServiceState::Active);
+        health.mark_success(
+            ServiceState::Degraded,
+            vec![HealthIssue::SyntheticFillObserved, HealthIssue::ProjectionDriftDetected],
+            Some(dec!(2260.4)),
+        );
+        assert_eq!(health.service_state, ServiceState::Degraded);
         assert_eq!(health.consecutive_errors, 0);
         assert_eq!(health.last_mid_price, Some(dec!(2260.4)));
-        assert_eq!(health.issues, vec![HealthIssue::SyntheticFillObserved]);
+        assert_eq!(
+            health.issues,
+            vec![HealthIssue::SyntheticFillObserved, HealthIssue::ProjectionDriftDetected]
+        );
     }
 }
