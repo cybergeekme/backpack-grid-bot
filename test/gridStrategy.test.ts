@@ -489,6 +489,61 @@ test('service emits filled alerts with fee and realized pnl when fills are enabl
   await service.stop();
 });
 
+test('service emits reconciliation fallback filled alerts when position changes without fill events', async () => {
+  resetGridEnv();
+  process.env.GRID_LEVELS = '1';
+  process.env.GRID_SPACING_BPS = '50';
+  process.env.GRID_ORDER_SIZE = '0.01';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-fill-fallback-alerts');
+  process.env.GRID_SERVICE_NAME = 'grid-fill-fallback-alerts-test';
+  process.env.TELEGRAM_ALERTS_ENABLED = 'true';
+  process.env.TELEGRAM_ALERT_LEVEL = 'info';
+  process.env.TELEGRAM_NOTIFY_FILLS = 'true';
+  process.env.TELEGRAM_NOTIFY_ORDER_EVENTS = 'true';
+
+  const delivered: AlertEvent[] = [];
+  const alerts = new AlertManager(
+    { enabled: true, minSeverity: 'info', dedupMs: 60_000 },
+    [{ notify: async (event) => void delivered.push(event) }]
+  );
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(100, config.symbol, 10_000);
+  const originalOnEvent = adapter.onEvent.bind(adapter);
+  adapter.onEvent = (listener) => originalOnEvent((event) => {
+    if (event.kind === 'fill' || event.kind === 'position') return;
+    listener(event);
+  });
+
+  const service = new GridTradingService(config, adapter, alerts);
+  await service.start();
+  await service.rebalance();
+
+  adapter.movePrice(99);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await service.reconcileWithExchange();
+
+  const fallbackFilledAlerts = delivered.filter(
+    (event) => event.title === 'Order filled' && event.details?.source === 'reconciliation_fallback'
+  );
+  assert.equal(fallbackFilledAlerts.length, 1);
+  assert.equal(fallbackFilledAlerts[0]?.details?.side, 'buy');
+  assert.equal(fallbackFilledAlerts[0]?.details?.qty, 0.01);
+  assert.equal(fallbackFilledAlerts[0]?.details?.positionAfter, 0.01);
+  assert.equal(fallbackFilledAlerts[0]?.details?.openingFill, true);
+  assert.equal(fallbackFilledAlerts[0]?.details?.fee, 0);
+
+  await service.reconcileWithExchange();
+  const fallbackFilledAlertsAfterSecondReconcile = delivered.filter(
+    (event) => event.title === 'Order filled' && event.details?.source === 'reconciliation_fallback'
+  );
+  assert.equal(fallbackFilledAlertsAfterSecondReconcile.length, 1);
+
+  await service.stop();
+});
+
 test('runtime checkpoints stay compact and recover from persisted orders instead of embedding them', async () => {
   process.env.GRID_LEVELS = '1';
   process.env.GRID_SPACING_BPS = '50';

@@ -12,6 +12,7 @@ import type {
   ExchangeAdapter,
   Fill,
   GridLevel,
+  Order,
   LeverageCapableAdapter,
   OrderRequest,
   Position,
@@ -38,6 +39,14 @@ interface FillAlertMetrics {
   entryPriceAfter?: number;
   closedQty?: number;
   openingFill?: boolean;
+}
+
+interface InferredFillContext {
+  side: 'buy' | 'sell';
+  qty: number;
+  price?: number;
+  orderId?: string;
+  clientOrderId?: string;
 }
 
 export class GridTradingService {
@@ -252,12 +261,16 @@ export class GridTradingService {
   }
 
   async reconcileWithExchange(): Promise<void> {
-    const currentSnapshot = this.state.get().snapshot;
+    const stateBefore = this.state.get();
+    const previousPosition = stateBefore.position;
+    const previousOrders = stateBefore.workingOrders;
+    const currentSnapshot = stateBefore.snapshot;
     const midPrice = await this.adapter.markPrice(this.config.symbol);
     this.runtimeHealth.lastMidPrice = midPrice;
     this.updatePauseHealth(currentSnapshot, midPrice);
     const orders = await this.adapter.getOpenOrders(this.config.symbol);
     const position = await this.adapter.getPosition(this.config.symbol);
+    this.emitReconcileFillFallback(previousPosition, position, previousOrders, orders);
     this.state.setWorkingOrders(orders);
     this.state.setPosition(position);
     this.oms.applyPositionUpdate(position);
@@ -491,6 +504,87 @@ export class GridTradingService {
       ts: Date.now()
     };
     this.persistence.persistCheckpoint('runtime', checkpoint);
+  }
+
+  private emitReconcileFillFallback(
+    previousPosition: Position | undefined,
+    currentPosition: Position,
+    previousOrders: Order[],
+    currentOrders: Order[]
+  ): void {
+    if (!this.config.telegramNotifyFills) return;
+    const inferred = this.inferFillFromReconciliation(previousPosition, currentPosition, previousOrders, currentOrders);
+    if (!inferred) return;
+
+    const syntheticFill: Fill = {
+      orderId: inferred.orderId ?? `reconcile-${this.config.symbol}-${Date.now()}`,
+      clientOrderId: inferred.clientOrderId ?? '',
+      symbol: this.config.symbol,
+      side: inferred.side,
+      price: inferred.price ?? 0,
+      qty: inferred.qty,
+      fee: 0,
+      ts: Date.now()
+    };
+    const fillMetrics = this.estimateFillAlertMetrics(previousPosition, syntheticFill);
+    this.logger.info('Emitting reconciliation fill fallback alert.', {
+      symbol: this.config.symbol,
+      side: inferred.side,
+      qty: inferred.qty,
+      price: inferred.price,
+      orderId: inferred.orderId,
+      positionBefore: previousPosition?.size,
+      positionAfter: currentPosition.size
+    });
+    this.emitAlert({
+      key: `fill-fallback:${syntheticFill.orderId}:${syntheticFill.ts}`,
+      severity: 'info',
+      title: 'Order filled',
+      message: `${syntheticFill.side.toUpperCase()} ${syntheticFill.symbol} order filled (reconciled).`,
+      details: {
+        symbol: syntheticFill.symbol,
+        side: syntheticFill.side,
+        price: inferred.price,
+        qty: syntheticFill.qty,
+        fee: fillMetrics.fee,
+        realizedPnl: fillMetrics.realizedPnl,
+        positionAfter: currentPosition.size,
+        entryPriceAfter: currentPosition.entryPrice,
+        closedQty: fillMetrics.closedQty,
+        openingFill: fillMetrics.openingFill,
+        orderId: syntheticFill.orderId,
+        clientOrderId: syntheticFill.clientOrderId,
+        source: 'reconciliation_fallback'
+      },
+      dedupMs: 0
+    });
+  }
+
+  private inferFillFromReconciliation(
+    previousPosition: Position | undefined,
+    currentPosition: Position,
+    previousOrders: Order[],
+    currentOrders: Order[]
+  ): InferredFillContext | undefined {
+    const before = Number(previousPosition?.size ?? 0);
+    const after = Number(currentPosition.size ?? 0);
+    const delta = after - before;
+    if (!delta) return undefined;
+
+    const side: 'buy' | 'sell' = delta > 0 ? 'buy' : 'sell';
+    const qty = Math.abs(delta);
+    const currentIds = new Set(currentOrders.map((order) => order.orderId));
+    const missingCandidates = previousOrders.filter((order) => !currentIds.has(order.orderId) && order.side === side);
+    const exactQtyCandidate = missingCandidates.find((order) => Math.abs(order.qty - qty) < 1e-9);
+    const candidate = exactQtyCandidate ?? missingCandidates[0];
+
+    return {
+      side,
+      qty,
+      price: candidate?.price,
+      orderId: candidate?.orderId,
+      clientOrderId: candidate?.clientOrderId
+    };
   }
 
   private estimateFillAlertMetrics(positionBefore: Position | undefined, fill: Fill): FillAlertMetrics {
