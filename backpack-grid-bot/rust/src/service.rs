@@ -4,7 +4,7 @@ use crate::{
     adapter::ReadOnlyAccountSnapshot,
     events::{RuntimeEvent, RuntimeEventKind},
     execution::{ExecutionEngine, ExecutionPlan, ExistingOrder},
-    health::{HealthIssue, RuntimeHealth, ServiceState},
+    health::{HealthIssue, PauseReason, RuntimeHealth, ServiceState},
     planner::GridPlanner,
     reconcile::{ReconcileEngine, ReconcileOutcome, ReconcileSnapshot},
     state::{InMemoryStateStore, RuntimeState},
@@ -62,6 +62,42 @@ impl GridBotService {
         self.state.set_position(current_position.clone());
         self.state.set_working_orders(current_orders.clone());
 
+        if let Some(pause_reason) = self.guard_pause_reason(mid_price) {
+            let service_state = ServiceState::Paused;
+            let mut events = Vec::new();
+            if previous.health.service_state != service_state {
+                events.push(RuntimeEvent::service_state_changed(
+                    service_state,
+                    format!("service state changed from {:?} to {:?}", previous.health.service_state, service_state),
+                ));
+            }
+            events.push(RuntimeEvent::paused(
+                service_state,
+                pause_reason_message(pause_reason, mid_price),
+                Some(mid_price),
+            ));
+            for event in events.iter().cloned() {
+                self.state.push_event(event, 200);
+            }
+
+            let mut health = RuntimeHealth::default();
+            health.pause(pause_reason, Some(mid_price));
+            self.state.set_health(health);
+
+            return ServiceCycleOutput {
+                planner: PlannerOutput {
+                    active_levels: vec![],
+                    desired_orders: vec![],
+                    rejected_levels: vec![],
+                    projected_position_after_orders: current_position.size,
+                },
+                execution: ExecutionPlan::default(),
+                reconciliation: ReconcileOutcome::default(),
+                events,
+                state: self.state.get(),
+            };
+        }
+
         let planner_output = self.planner.plan_orders(mid_price, Some(&current_position));
         let execution_plan = self.execution.plan_from_planner_output(&planner_output, &current_orders);
         let reconciliation = self.reconcile.reconcile(
@@ -109,6 +145,18 @@ impl GridBotService {
 
     pub fn config(&self) -> &AppConfig {
         &self.config
+    }
+
+    fn guard_pause_reason(&self, mid_price: Decimal) -> Option<PauseReason> {
+        if self.config.kill_switch {
+            return Some(PauseReason::KillSwitch);
+        }
+        if self.config.grid_min_price.is_some_and(|min| mid_price < min)
+            || self.config.grid_max_price.is_some_and(|max| mid_price > max)
+        {
+            return Some(PauseReason::PriceOutOfRange);
+        }
+        None
     }
 }
 
@@ -206,6 +254,14 @@ fn derive_service_state(execution: &ExecutionPlan, reconciliation: &ReconcileOut
     }
 }
 
+fn pause_reason_message(reason: PauseReason, mid_price: Decimal) -> String {
+    match reason {
+        PauseReason::KillSwitch => "grid paused by kill switch".to_string(),
+        PauseReason::PriceOutOfRange => format!("grid paused: mark price {mid_price} out of configured range"),
+        PauseReason::Manual => "grid paused manually".to_string(),
+    }
+}
+
 fn qty_epsilon(order_size: &Decimal) -> Decimal {
     let decimals = order_size.normalize().to_string().split('.').nth(1).map(|s| s.len()).unwrap_or(0) as u32;
     Decimal::new(1, decimals + 3)
@@ -216,7 +272,7 @@ mod tests {
     use rust_decimal_macros::dec;
 
     use super::*;
-    use crate::{domain::OrderType, GridMode, OrderIntent, OrderSide, ServiceState};
+    use crate::{domain::OrderType, GridMode, OrderIntent, OrderSide, RuntimeEventKind, ServiceState};
 
     fn cfg() -> AppConfig {
         AppConfig {
@@ -287,5 +343,52 @@ mod tests {
         assert_eq!(out.state.recent_fills.len(), 1);
         assert!(!out.events.is_empty());
         assert_eq!(out.state.health.service_state, ServiceState::Degraded);
+    }
+
+    #[test]
+    fn service_cycle_pauses_when_kill_switch_enabled() {
+        let mut paused_cfg = cfg();
+        paused_cfg.kill_switch = true;
+        let mut service = GridBotService::new(paused_cfg);
+
+        let out = service.plan_cycle(
+            dec!(2260.4),
+            Position {
+                symbol: "ETH_USDC_PERP".into(),
+                size: dec!(0),
+                entry_price: dec!(0),
+                unrealized_pnl: dec!(0),
+            },
+            vec![],
+        );
+
+        assert!(out.planner.desired_orders.is_empty());
+        assert!(out.execution.place.is_empty());
+        assert_eq!(out.state.health.service_state, ServiceState::Paused);
+        assert_eq!(out.state.health.pause_reason, Some(PauseReason::KillSwitch));
+        assert!(out.events.iter().any(|event| event.kind == RuntimeEventKind::GridPaused));
+    }
+
+    #[test]
+    fn service_cycle_pauses_when_price_out_of_range() {
+        let mut ranged_cfg = cfg();
+        ranged_cfg.grid_min_price = Some(dec!(2250));
+        ranged_cfg.grid_max_price = Some(dec!(2265));
+        let mut service = GridBotService::new(ranged_cfg);
+
+        let out = service.plan_cycle(
+            dec!(2270),
+            Position {
+                symbol: "ETH_USDC_PERP".into(),
+                size: dec!(0),
+                entry_price: dec!(0),
+                unrealized_pnl: dec!(0),
+            },
+            vec![],
+        );
+
+        assert_eq!(out.state.health.service_state, ServiceState::Paused);
+        assert_eq!(out.state.health.pause_reason, Some(PauseReason::PriceOutOfRange));
+        assert!(out.events.iter().any(|event| event.kind == RuntimeEventKind::GridPaused));
     }
 }

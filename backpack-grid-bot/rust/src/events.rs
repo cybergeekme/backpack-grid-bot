@@ -7,6 +7,7 @@ use crate::{health::ServiceState, GridLevel, OrderIntent, SyntheticFill};
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeEventKind {
     ServiceStateChanged,
+    GridPaused,
     OrderPlanned,
     OrderCancelled,
     OrderRetained,
@@ -38,6 +39,19 @@ impl RuntimeEvent {
             service_state: Some(service_state),
             matched_orders: None,
             mark_price: None,
+        }
+    }
+
+    pub fn paused(service_state: ServiceState, message: impl Into<String>, mark_price: Option<Decimal>) -> Self {
+        Self {
+            kind: RuntimeEventKind::GridPaused,
+            message: message.into(),
+            order: None,
+            level: None,
+            fill: None,
+            service_state: Some(service_state),
+            matched_orders: None,
+            mark_price,
         }
     }
 
