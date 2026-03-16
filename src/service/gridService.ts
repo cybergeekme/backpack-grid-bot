@@ -115,6 +115,8 @@ export class GridTradingService {
     this.state.setSnapshot(snapshot);
     this.persistence.persistSnapshot(snapshot);
 
+    const previousPosition = this.state.get().position;
+    const previousOrders = this.state.get().workingOrders;
     const position = await this.adapter.getPosition(this.config.symbol);
     this.state.setPosition(position);
     this.persistence.persistPosition(position);
@@ -164,6 +166,7 @@ export class GridTradingService {
 
     const tradingAccessMode = this.adapter.getTradingAccessMode();
     const syncResult = await this.oms.syncGrid(this.config.symbol, desired);
+    this.emitReconcileFillFallback(previousPosition, position, previousOrders, syncResult.orders);
     this.state.setWorkingOrders(syncResult.orders);
     this.persistence.persistOrders(syncResult.orders);
     if (this.config.telegramNotifyOrderEvents) {
