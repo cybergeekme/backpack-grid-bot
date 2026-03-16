@@ -5,6 +5,8 @@ import type { ExchangeAdapter, Order, OrderRequest, Position } from '../types';
 export interface SyncGridResult {
   orders: Order[];
   reconciliation: ReconciliationResult;
+  placed: Order[];
+  cancelled: Order[];
 }
 
 export class OrderManager {
@@ -23,15 +25,17 @@ export class OrderManager {
       this.seedWorkingOrders(existing);
       const reconciliation = this.reconciliation.compare(existing, desired);
       this.logReadOnlySkip(symbol, existing.length, desired.length, reconciliation.missingOnExchange.length, reconciliation.unexpectedOnExchange.length);
-      return { orders: existing, reconciliation };
+      return { orders: existing, reconciliation, placed: [], cancelled: [] };
     }
     this.seedWorkingOrders(existing);
     const desiredKeys = new Set(desired.map((o) => this.key(o.side, o.price, o.qty)));
+    const cancelled: Order[] = [];
 
     for (const order of existing) {
       const key = this.key(order.side, order.price, order.qty);
       if (!desiredKeys.has(key)) {
         await this.adapter.cancelOrder(symbol, order.orderId);
+        cancelled.push({ ...order, status: 'cancelled' });
       }
     }
 
@@ -59,7 +63,7 @@ export class OrderManager {
       missingOnExchange: reconciliation.missingOnExchange.length,
       unexpectedOnExchange: reconciliation.unexpectedOnExchange.length
     });
-    return { orders: finalOrders, reconciliation };
+    return { orders: finalOrders, reconciliation, placed, cancelled };
   }
 
   applyOrderUpdate(order: Order): void {

@@ -134,6 +134,50 @@ export class GridTradingService {
     const syncResult = await this.oms.syncGrid(this.config.symbol, desired);
     this.state.setWorkingOrders(syncResult.orders);
     this.persistence.persistOrders(syncResult.orders);
+    if (this.config.telegramNotifyOrderEvents) {
+      for (const order of syncResult.cancelled) {
+        this.emitAlert({
+          key: `order:${order.orderId}:cancelled:${Date.now()}`,
+          severity: 'info',
+          title: 'Order cancelled',
+          message: `${order.side.toUpperCase()} ${order.symbol} order was cancelled during grid sync.`,
+          details: {
+            symbol: order.symbol,
+            side: order.side,
+            status: 'cancelled',
+            price: order.price,
+            qty: order.qty,
+            filledQty: order.filledQty,
+            reduceOnly: order.reduceOnly,
+            postOnly: order.postOnly,
+            orderId: order.orderId,
+            clientOrderId: order.clientOrderId
+          },
+          dedupMs: 0
+        });
+      }
+      for (const order of syncResult.placed) {
+        this.emitAlert({
+          key: `order:${order.orderId}:open:${Date.now()}`,
+          severity: 'info',
+          title: 'Order open',
+          message: `${order.side.toUpperCase()} ${order.symbol} order was placed during grid sync.`,
+          details: {
+            symbol: order.symbol,
+            side: order.side,
+            status: order.status,
+            price: order.price,
+            qty: order.qty,
+            filledQty: order.filledQty,
+            reduceOnly: order.reduceOnly,
+            postOnly: order.postOnly,
+            orderId: order.orderId,
+            clientOrderId: order.clientOrderId
+          },
+          dedupMs: 0
+        });
+      }
+    }
     const reconciliationEvent: ReconciliationEvent = {
       symbol: this.config.symbol,
       matched: syncResult.reconciliation.matched,

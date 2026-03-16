@@ -338,6 +338,38 @@ test('service emits Telegram alerts for each order status update when enabled', 
   await service.stop();
 });
 
+test('service emits Telegram alerts for REST-placed orders during grid sync even without websocket events', async () => {
+  resetGridEnv();
+  process.env.GRID_LEVELS = '1';
+  process.env.GRID_SPACING_BPS = '50';
+  process.env.GRID_ORDER_SIZE = '0.01';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-rest-order-alerts');
+  process.env.GRID_SERVICE_NAME = 'grid-rest-order-alerts-test';
+  process.env.TELEGRAM_ALERTS_ENABLED = 'true';
+  process.env.TELEGRAM_ALERT_LEVEL = 'info';
+  process.env.TELEGRAM_NOTIFY_ORDER_EVENTS = 'true';
+
+  const delivered: AlertEvent[] = [];
+  const alerts = new AlertManager(
+    { enabled: true, minSeverity: 'info', dedupMs: 60_000 },
+    [{ notify: async (event) => void delivered.push(event) }]
+  );
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(100, config.symbol, 10_000);
+  const service = new GridTradingService(config, adapter, alerts);
+  await service.start();
+  await service.rebalance();
+
+  const firstOpenAlerts = delivered.filter((event) => event.title === 'Order open');
+  assert.ok(firstOpenAlerts.length >= 2);
+  assert.ok(firstOpenAlerts.every((event) => event.dedupMs === 0));
+
+  await service.stop();
+});
+
 test('runtime checkpoints stay compact and recover from persisted orders instead of embedding them', async () => {
   process.env.GRID_LEVELS = '1';
   process.env.GRID_SPACING_BPS = '50';
