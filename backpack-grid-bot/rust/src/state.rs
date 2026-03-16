@@ -1,12 +1,15 @@
-use crate::{execution::ExistingOrder, reconcile::SyntheticFill, Position};
 use serde::{Deserialize, Serialize};
+
+use crate::{execution::ExistingOrder, health::RuntimeHealth, reconcile::SyntheticFill, Position, RuntimeEvent};
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct RuntimeState {
     pub working_orders: Vec<ExistingOrder>,
     pub recent_fills: Vec<SyntheticFill>,
+    pub recent_events: Vec<RuntimeEvent>,
     pub position: Option<Position>,
     pub last_mid_price: Option<rust_decimal::Decimal>,
+    pub health: RuntimeHealth,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -44,6 +47,16 @@ impl InMemoryStateStore {
         self.state.recent_fills.insert(0, fill);
         self.state.recent_fills.truncate(limit);
     }
+
+    pub fn push_event(&mut self, event: RuntimeEvent, limit: usize) {
+        let limit = limit.max(1);
+        self.state.recent_events.insert(0, event);
+        self.state.recent_events.truncate(limit);
+    }
+
+    pub fn set_health(&mut self, health: RuntimeHealth) {
+        self.state.health = health;
+    }
 }
 
 #[cfg(test)]
@@ -51,7 +64,7 @@ mod tests {
     use rust_decimal_macros::dec;
 
     use super::*;
-    use crate::{FillSource, OrderSide};
+    use crate::{FillSource, OrderSide, RuntimeEventKind, ServiceState};
 
     #[test]
     fn state_store_returns_copies() {
@@ -87,5 +100,18 @@ mod tests {
         }
         assert_eq!(store.get().recent_fills.len(), 2);
         assert_eq!(store.get().recent_fills[0].order_id.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn state_store_limits_recent_events() {
+        let mut store = InMemoryStateStore::new();
+        for _ in 0..3 {
+            store.push_event(
+                crate::RuntimeEvent::service_state_changed(ServiceState::Active, "active"),
+                2,
+            );
+        }
+        assert_eq!(store.get().recent_events.len(), 2);
+        assert_eq!(store.get().recent_events[0].kind, RuntimeEventKind::ServiceStateChanged);
     }
 }

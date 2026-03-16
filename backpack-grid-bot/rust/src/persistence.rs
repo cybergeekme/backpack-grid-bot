@@ -100,7 +100,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        reconcile::ReconcileOutcome, service::ServiceCycleOutput, ExecutionPlan, PlannerOutput, Position, RuntimeState,
+        reconcile::ReconcileOutcome, service::ServiceCycleOutput, ExecutionPlan, PlannerOutput, Position, RuntimeHealth,
+        RuntimeState,
     };
 
     #[test]
@@ -116,9 +117,11 @@ mod tests {
             },
             execution: ExecutionPlan::default(),
             reconciliation: ReconcileOutcome::default(),
+            events: vec![],
             state: RuntimeState {
                 working_orders: vec![],
                 recent_fills: vec![],
+                recent_events: vec![],
                 position: Some(Position {
                     symbol: "ETH_USDC_PERP".into(),
                     size: dec!(-0.003),
@@ -126,6 +129,7 @@ mod tests {
                     unrealized_pnl: dec!(0),
                 }),
                 last_mid_price: Some(dec!(2260.4)),
+                health: RuntimeHealth::default(),
             },
         };
 

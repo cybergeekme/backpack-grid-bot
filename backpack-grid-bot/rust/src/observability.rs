@@ -2,7 +2,7 @@ use anyhow::Result;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::{GridLevel, OrderIntent, ServiceCycleOutput, SyntheticFill};
+use crate::{GridLevel, OrderIntent, RuntimeEvent, RuntimeHealth, ServiceCycleOutput, SyntheticFill};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShadowOrderView {
@@ -18,6 +18,8 @@ pub struct ShadowOrderView {
 pub struct ShadowReport {
     pub symbol: String,
     pub mark_price: Decimal,
+    pub health: RuntimeHealth,
+    pub events: Vec<RuntimeEvent>,
     pub desired_orders: Vec<ShadowOrderView>,
     pub active_levels: Vec<GridLevel>,
     pub place_orders: Vec<ShadowOrderView>,
@@ -36,6 +38,8 @@ impl ShadowReport {
         Self {
             symbol: symbol.into(),
             mark_price: cycle.state.last_mid_price.unwrap_or_default(),
+            health: cycle.state.health.clone(),
+            events: cycle.events.clone(),
             desired_orders: cycle.planner.desired_orders.iter().map(order_view_from_intent).collect(),
             active_levels: cycle.planner.active_levels.clone(),
             place_orders: cycle.execution.place.iter().map(order_view_from_intent).collect(),
@@ -84,7 +88,7 @@ mod tests {
     use super::*;
     use crate::{
         execution::ExecutionPlan, reconcile::ReconcileOutcome, service::ServiceCycleOutput, PlannerOutput, Position,
-        RuntimeState,
+        RuntimeHealth, RuntimeState,
     };
 
     #[test]
@@ -98,9 +102,11 @@ mod tests {
             },
             execution: ExecutionPlan::default(),
             reconciliation: ReconcileOutcome::default(),
+            events: vec![],
             state: RuntimeState {
                 working_orders: vec![],
                 recent_fills: vec![],
+                recent_events: vec![],
                 position: Some(Position {
                     symbol: "ETH_USDC_PERP".into(),
                     size: dec!(-0.003),
@@ -108,6 +114,7 @@ mod tests {
                     unrealized_pnl: dec!(0),
                 }),
                 last_mid_price: Some(dec!(2260.4)),
+                health: RuntimeHealth::default(),
             },
         };
         let report = ShadowReport::from_cycle("ETH_USDC_PERP", &cycle);

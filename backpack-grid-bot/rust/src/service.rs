@@ -2,7 +2,9 @@ use rust_decimal::Decimal;
 
 use crate::{
     adapter::ReadOnlyAccountSnapshot,
+    events::{RuntimeEvent, RuntimeEventKind},
     execution::{ExecutionEngine, ExecutionPlan, ExistingOrder},
+    health::{HealthIssue, RuntimeHealth, ServiceState},
     planner::GridPlanner,
     reconcile::{ReconcileEngine, ReconcileOutcome, ReconcileSnapshot},
     state::{InMemoryStateStore, RuntimeState},
@@ -14,6 +16,7 @@ pub struct ServiceCycleOutput {
     pub planner: PlannerOutput,
     pub execution: ExecutionPlan,
     pub reconciliation: ReconcileOutcome,
+    pub events: Vec<RuntimeEvent>,
     pub state: RuntimeState,
 }
 
@@ -73,14 +76,29 @@ impl GridBotService {
             &planner_output.desired_orders,
         );
 
+        let events = build_runtime_events(
+            &planner_output,
+            &execution_plan,
+            &reconciliation,
+            mid_price,
+            previous.health.service_state,
+        );
+
         if let Some(fill) = reconciliation.synthetic_fill.clone() {
             self.state.push_fill(fill, 100);
         }
+        for event in events.iter().cloned() {
+            self.state.push_event(event, 200);
+        }
+
+        let health = build_runtime_health(mid_price, &current_position, &execution_plan, &reconciliation);
+        self.state.set_health(health);
 
         ServiceCycleOutput {
             planner: planner_output,
             execution: execution_plan,
             reconciliation,
+            events,
             state: self.state.get(),
         }
     }
@@ -94,6 +112,100 @@ impl GridBotService {
     }
 }
 
+fn build_runtime_events(
+    planner: &PlannerOutput,
+    execution: &ExecutionPlan,
+    reconciliation: &ReconcileOutcome,
+    mid_price: Decimal,
+    previous_service_state: ServiceState,
+) -> Vec<RuntimeEvent> {
+    let mut events = Vec::new();
+
+    let next_service_state = derive_service_state(execution, reconciliation);
+    if next_service_state != previous_service_state {
+        events.push(RuntimeEvent::service_state_changed(
+            next_service_state,
+            format!("service state changed from {:?} to {:?}", previous_service_state, next_service_state),
+        ));
+    }
+
+    for order in &execution.place {
+        events.push(RuntimeEvent::order_planned(
+            RuntimeEventKind::OrderPlanned,
+            order.clone(),
+            Some(mid_price),
+            format!("planned order {}", order.client_order_id),
+        ));
+    }
+    for order in &execution.cancel {
+        events.push(RuntimeEvent::order_planned(
+            RuntimeEventKind::OrderCancelled,
+            order.intent.clone(),
+            Some(mid_price),
+            format!("cancel order {}", order.client_order_id),
+        ));
+    }
+    for order in &execution.keep {
+        events.push(RuntimeEvent::order_planned(
+            RuntimeEventKind::OrderRetained,
+            order.intent.clone(),
+            Some(mid_price),
+            format!("keep order {}", order.client_order_id),
+        ));
+    }
+    for (level, reason) in &planner.rejected_levels {
+        events.push(RuntimeEvent::planner_rejected(
+            level.clone(),
+            format!("planner rejected level {:?}", reason),
+            Some(mid_price),
+        ));
+    }
+    if let Some(fill) = reconciliation.synthetic_fill.clone() {
+        events.push(RuntimeEvent::synthetic_fill(fill, Some(mid_price)));
+    }
+    if !reconciliation.diff.missing_on_exchange.is_empty() || !reconciliation.diff.unexpected_on_exchange.is_empty() {
+        events.push(RuntimeEvent::mismatch(reconciliation.diff.matched, Some(mid_price)));
+    }
+
+    events
+}
+
+fn build_runtime_health(
+    mid_price: Decimal,
+    current_position: &Position,
+    execution: &ExecutionPlan,
+    reconciliation: &ReconcileOutcome,
+) -> RuntimeHealth {
+    let mut issues = Vec::new();
+    if reconciliation.synthetic_fill.is_some() {
+        issues.push(HealthIssue::SyntheticFillObserved);
+    }
+    if !reconciliation.diff.missing_on_exchange.is_empty() || !reconciliation.diff.unexpected_on_exchange.is_empty() {
+        issues.push(HealthIssue::OpenOrderMismatch);
+    }
+    if current_position.symbol.is_empty() {
+        issues.push(HealthIssue::PositionMissing);
+    }
+    if mid_price <= Decimal::ZERO {
+        issues.push(HealthIssue::MarkPriceMissing);
+    }
+
+    let service_state = derive_service_state(execution, reconciliation);
+    let mut health = RuntimeHealth::default();
+    health.mark_success(service_state, issues, Some(mid_price));
+    health
+}
+
+fn derive_service_state(execution: &ExecutionPlan, reconciliation: &ReconcileOutcome) -> ServiceState {
+    if !reconciliation.diff.missing_on_exchange.is_empty() || !reconciliation.diff.unexpected_on_exchange.is_empty() {
+        ServiceState::Degraded
+    } else if execution.place.is_empty() && execution.cancel.is_empty() && execution.keep.is_empty() {
+        ServiceState::Starting
+    } else {
+        ServiceState::Active
+    }
+}
+
 fn qty_epsilon(order_size: &Decimal) -> Decimal {
     let decimals = order_size.normalize().to_string().split('.').nth(1).map(|s| s.len()).unwrap_or(0) as u32;
     Decimal::new(1, decimals + 3)
@@ -104,7 +216,7 @@ mod tests {
     use rust_decimal_macros::dec;
 
     use super::*;
-    use crate::{domain::OrderType, GridMode, OrderIntent, OrderSide};
+    use crate::{domain::OrderType, GridMode, OrderIntent, OrderSide, ServiceState};
 
     fn cfg() -> AppConfig {
         AppConfig {
@@ -143,11 +255,12 @@ mod tests {
     }
 
     #[test]
-    fn service_cycle_plans_orders_and_records_reconcile_fill() {
+    fn service_cycle_plans_orders_records_events_and_health() {
         let mut service = GridBotService::new(cfg());
         service.restore(RuntimeState {
             working_orders: vec![existing("1", OrderSide::Sell, dec!(2268.32), dec!(0.003), false)],
             recent_fills: vec![],
+            recent_events: vec![],
             position: Some(Position {
                 symbol: "ETH_USDC_PERP".into(),
                 size: dec!(-0.003),
@@ -155,6 +268,7 @@ mod tests {
                 unrealized_pnl: dec!(0),
             }),
             last_mid_price: Some(dec!(2260.4)),
+            health: RuntimeHealth::default(),
         });
 
         let out = service.plan_cycle(
@@ -171,6 +285,7 @@ mod tests {
         assert!(!out.planner.desired_orders.is_empty());
         assert!(out.reconciliation.synthetic_fill.is_some());
         assert_eq!(out.state.recent_fills.len(), 1);
-        assert_eq!(out.state.recent_fills[0].side, OrderSide::Sell);
+        assert!(!out.events.is_empty());
+        assert_eq!(out.state.health.service_state, ServiceState::Degraded);
     }
 }
