@@ -14,6 +14,7 @@ pub enum RuntimeEventKind {
     PlannerRejectedLevel,
     SyntheticFillInferred,
     ReconciliationMismatch,
+    ProjectionDriftDetected,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -25,6 +26,8 @@ pub struct RuntimeEvent {
     pub fill: Option<SyntheticFill>,
     pub service_state: Option<ServiceState>,
     pub matched_orders: Option<usize>,
+    pub projection_only_orders: Option<usize>,
+    pub exchange_only_orders: Option<usize>,
     pub mark_price: Option<Decimal>,
 }
 
@@ -38,6 +41,8 @@ impl RuntimeEvent {
             fill: None,
             service_state: Some(service_state),
             matched_orders: None,
+            projection_only_orders: None,
+            exchange_only_orders: None,
             mark_price: None,
         }
     }
@@ -51,6 +56,8 @@ impl RuntimeEvent {
             fill: None,
             service_state: Some(service_state),
             matched_orders: None,
+            projection_only_orders: None,
+            exchange_only_orders: None,
             mark_price,
         }
     }
@@ -64,6 +71,8 @@ impl RuntimeEvent {
             fill: None,
             service_state: None,
             matched_orders: None,
+            projection_only_orders: None,
+            exchange_only_orders: None,
             mark_price,
         }
     }
@@ -77,6 +86,8 @@ impl RuntimeEvent {
             fill: None,
             service_state: None,
             matched_orders: None,
+            projection_only_orders: None,
+            exchange_only_orders: None,
             mark_price,
         }
     }
@@ -90,6 +101,8 @@ impl RuntimeEvent {
             fill: Some(fill),
             service_state: None,
             matched_orders: None,
+            projection_only_orders: None,
+            exchange_only_orders: None,
             mark_price,
         }
     }
@@ -103,6 +116,30 @@ impl RuntimeEvent {
             fill: None,
             service_state: None,
             matched_orders: Some(matched_orders),
+            projection_only_orders: None,
+            exchange_only_orders: None,
+            mark_price,
+        }
+    }
+
+    pub fn projection_drift(
+        projection_only_orders: usize,
+        exchange_only_orders: usize,
+        mark_price: Option<Decimal>,
+    ) -> Self {
+        Self {
+            kind: RuntimeEventKind::ProjectionDriftDetected,
+            message: format!(
+                "projected final orders drift from exchange state (projection_only={}, exchange_only={})",
+                projection_only_orders, exchange_only_orders
+            ),
+            order: None,
+            level: None,
+            fill: None,
+            service_state: None,
+            matched_orders: None,
+            projection_only_orders: Some(projection_only_orders),
+            exchange_only_orders: Some(exchange_only_orders),
             mark_price,
         }
     }

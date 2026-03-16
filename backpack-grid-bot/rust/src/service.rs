@@ -114,12 +114,14 @@ impl GridBotService {
             },
             &planner_output.desired_orders,
         );
+        let projection_drift = projection_drift_summary(&self.state.get().working_orders, executed.as_ref());
 
         let events = build_runtime_events(
             &planner_output,
             &execution_plan,
             executed.as_ref(),
             &reconciliation,
+            projection_drift,
             mid_price,
             previous.health.service_state,
         );
@@ -177,12 +179,13 @@ fn build_runtime_events(
     execution: &ExecutionPlan,
     executed: Option<&ExecutedPlan>,
     reconciliation: &ReconcileOutcome,
+    projection_drift: Option<ProjectionDriftSummary>,
     mid_price: Decimal,
     previous_service_state: ServiceState,
 ) -> Vec<RuntimeEvent> {
     let mut events = Vec::new();
 
-    let next_service_state = derive_service_state(executed, execution, reconciliation, false);
+    let next_service_state = derive_service_state(executed, execution, reconciliation, projection_drift.is_some());
     if next_service_state != previous_service_state {
         events.push(RuntimeEvent::service_state_changed(
             next_service_state,
@@ -236,6 +239,13 @@ fn build_runtime_events(
     }
     if !reconciliation.diff.missing_on_exchange.is_empty() || !reconciliation.diff.unexpected_on_exchange.is_empty() {
         events.push(RuntimeEvent::mismatch(reconciliation.diff.matched, Some(mid_price)));
+    }
+    if let Some(drift) = projection_drift {
+        events.push(RuntimeEvent::projection_drift(
+            drift.projection_only_orders,
+            drift.exchange_only_orders,
+            Some(mid_price),
+        ));
     }
 
     events
@@ -303,9 +313,18 @@ fn pause_reason_message(reason: PauseReason, mid_price: Decimal) -> String {
     }
 }
 
-fn projection_drift_detected(current_orders: &[ExistingOrder], executed: Option<&ExecutedPlan>) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProjectionDriftSummary {
+    projection_only_orders: usize,
+    exchange_only_orders: usize,
+}
+
+fn projection_drift_summary(
+    current_orders: &[ExistingOrder],
+    executed: Option<&ExecutedPlan>,
+) -> Option<ProjectionDriftSummary> {
     let Some(executed) = executed else {
-        return false;
+        return None;
     };
 
     let current_keys = current_orders
@@ -318,7 +337,20 @@ fn projection_drift_detected(current_orders: &[ExistingOrder], executed: Option<
         .map(|order| order_compare_key(&order.intent))
         .collect::<std::collections::BTreeSet<_>>();
 
-    current_keys != projected_keys
+    let projection_only_orders = projected_keys.difference(&current_keys).count();
+    let exchange_only_orders = current_keys.difference(&projected_keys).count();
+    if projection_only_orders == 0 && exchange_only_orders == 0 {
+        None
+    } else {
+        Some(ProjectionDriftSummary {
+            projection_only_orders,
+            exchange_only_orders,
+        })
+    }
+}
+
+fn projection_drift_detected(current_orders: &[ExistingOrder], executed: Option<&ExecutedPlan>) -> bool {
+    projection_drift_summary(current_orders, executed).is_some()
 }
 
 fn order_compare_key(intent: &OrderIntent) -> String {
@@ -416,6 +448,7 @@ mod tests {
         assert!(out.executed.is_some());
         assert!(out.events.iter().any(|event| event.kind == RuntimeEventKind::OrderPlanned));
         assert!(out.events.iter().any(|event| event.kind == RuntimeEventKind::ReconciliationMismatch));
+        assert!(out.events.iter().any(|event| event.kind == RuntimeEventKind::ProjectionDriftDetected));
     }
 
     #[test]
