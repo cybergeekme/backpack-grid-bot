@@ -121,7 +121,7 @@ export class GridTradingService {
     this.oms.applyPositionUpdate(position);
     const desired: OrderRequest[] = [];
     const activeLevels = this.selectActiveLevels(snapshot.levels, midPrice, position);
-    let plannedPosition = position.size;
+    let plannedPosition = this.normalizePositionSize(position.size);
 
     for (const level of activeLevels) {
       const isShortOnlyReduceBuy = this.config.gridMode === 'short_only' && level.side === 'buy';
@@ -132,7 +132,7 @@ export class GridTradingService {
 
       const projectedPosition: Position = {
         ...position,
-        size: plannedPosition
+        size: this.normalizePositionSize(plannedPosition)
       };
       const risk = this.risk.validateNewOrder(projectedPosition, level.side, qty);
       if (!risk.ok) {
@@ -159,7 +159,7 @@ export class GridTradingService {
         postOnly: true,
         reduceOnly: isShortOnlyReduceBuy
       });
-      plannedPosition += level.side === 'buy' ? qty : -qty;
+      plannedPosition = this.normalizePositionSize(plannedPosition + (level.side === 'buy' ? qty : -qty));
     }
 
     const tradingAccessMode = this.adapter.getTradingAccessMode();
@@ -588,15 +588,26 @@ export class GridTradingService {
     };
   }
 
-  private normalizeOrderQty(qty: number): number {
+  private orderPrecisionDecimals(): number {
     const normalizedOrderSize = String(this.config.orderSize);
-    const decimals = normalizedOrderSize.includes('.')
+    return normalizedOrderSize.includes('.')
       ? normalizedOrderSize.split('.')[1]?.length ?? 0
       : 0;
+  }
+
+  private normalizeOrderQty(qty: number): number {
+    const decimals = this.orderPrecisionDecimals();
     if (decimals <= 0) {
       return Math.round(qty);
     }
     return Number(qty.toFixed(decimals));
+  }
+
+  private normalizePositionSize(size: number): number {
+    const decimals = this.orderPrecisionDecimals();
+    const normalized = decimals <= 0 ? Math.round(size) : Number(size.toFixed(decimals));
+    const epsilon = decimals <= 0 ? 1e-9 : 10 ** (-(decimals + 3));
+    return Math.abs(normalized) < epsilon ? 0 : normalized;
   }
 
   private estimateFillAlertMetrics(positionBefore: Position | undefined, fill: Fill): FillAlertMetrics {

@@ -2,7 +2,13 @@ import type { AppConfig } from '../config';
 import type { Position, RiskDecision } from '../types';
 
 export class RiskEngine {
-  constructor(private readonly config: AppConfig) {}
+  private readonly shortOnlyLongFlipEpsilon: number;
+
+  constructor(private readonly config: AppConfig) {
+    const orderSizeText = String(config.orderSize);
+    const decimals = orderSizeText.includes('.') ? orderSizeText.split('.')[1]?.length ?? 0 : 0;
+    this.shortOnlyLongFlipEpsilon = decimals <= 0 ? 1e-9 : 10 ** (-(decimals + 3));
+  }
 
   validateNewOrder(position: Position, side: 'buy' | 'sell', qty: number): RiskDecision {
     if (this.config.killSwitch) {
@@ -12,7 +18,7 @@ export class RiskEngine {
       return { ok: false, reason: 'qty_must_be_positive' };
     }
     const projected = position.size + (side === 'buy' ? qty : -qty);
-    if (this.config.gridMode === 'short_only' && projected > 0) {
+    if (this.config.gridMode === 'short_only' && projected > this.shortOnlyLongFlipEpsilon) {
       return { ok: false, reason: 'short_only_long_flip_blocked' };
     }
     if (Math.abs(projected) > this.config.maxPositionAbs) {

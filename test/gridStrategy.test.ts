@@ -583,9 +583,10 @@ test('service normalizes short-only reduce-buy qty to configured order-size prec
   await service.rebalance();
 
   const buyOrders = service.snapshot().workingOrders.filter((order) => order.side === 'buy');
-  assert.ok(buyOrders.length >= 1);
+  assert.equal(buyOrders.length, 3);
   assert.ok(buyOrders.every((order) => Number.isInteger(order.qty * 1000)));
   assert.ok(buyOrders.every((order) => String(order.qty).split('.')[1]?.length ?? 0 <= 3));
+  assert.ok(Math.abs(buyOrders.reduce((sum, order) => sum + order.qty, 0) - 0.009) < 1e-9);
 
   await service.stop();
 });
