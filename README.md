@@ -29,9 +29,11 @@ A production-oriented TypeScript skeleton for a futures grid trading service.
 - Consecutive loop failures trip a circuit breaker into `SAFE_MODE`; reconciliation continues but new rebalances stop.
 - Periodic REST reconciliation refreshes orders/position even while paused or degraded.
 - Optional Telegram alerting can page operators for lifecycle/state changes, circuit breaker trips, out-of-range pauses, reconciliation mismatches, and fills.
+- Fill alerts now support enriched Telegram output (`fee`, `realizedPnl`, `positionAfter`, `entryPriceAfter`, `closedQty`, `openingFill`) and normalize display precision so alert payloads do not leak JavaScript floating-point artifacts like `0.002999999999999999`.
+- If live Backpack order/fill events are missing, reconciliation can emit a synthetic `Order filled (reconciled)` fallback alert inferred from position/order-set changes; these alerts are explicitly marked with `source: reconciliation_fallback` and currently use `fee: 0` when the exchange did not provide a real fill event.
 - Read-only reconciliation logging is now deduplicated so validation runs do not spam identical warnings every loop.
 - WebSocket connection attempts inherit the same live-trading safety gate and degrade back to REST-only if WS connect fails.
-- Backpack integration currently covers authenticated REST calls for balances, open orders, single-position lookup, order placement/cancel, public mark prices, and typed WS normalization scaffolding for order/position/fill updates.
+- Backpack integration currently covers authenticated REST calls for balances, collateral/equity lookup, open orders, single-position lookup, order placement/cancel, public mark prices, and typed WS normalization scaffolding for order/position/fill updates.
 - Persistence now covers local runtime snapshots and checkpoints, but live-trading replay logic after partial exchange disconnects is still incomplete.
 
 ## Quick start
@@ -53,7 +55,7 @@ Optional:
 - `GRID_SYMBOL` (default: `ETH_USDC_PERP`)
 - `GRID_LEVELS` (default: `3`)
 - `GRID_SPACING_BPS` (default: `50`) for the legacy symmetric grid mode
-- `GRID_ORDER_SIZE` (default: `0.01`)
+- `GRID_ORDER_SIZE` (default: `0.01` in the template; for new live validation, start much smaller and size it relative to `GRID_MAX_POSITION_ABS`)
 - `GRID_MAX_POSITION_ABS` (default: `0.05`)
 - `GRID_MODE=neutral|short_bias|short_only` (default: `neutral`)
 - `GRID_ACTIVE_LEVELS=3` keeps only the nearest levels live instead of hanging the entire theoretical grid at once
@@ -151,6 +153,7 @@ This project follows Backpack's ED25519 signing model and current REST/WS surfac
 - `GET /api/v1/time`
 - `GET /api/v1/markPrices`
 - `GET /api/v1/capital`
+- `GET /api/v1/capital/collateral`
 - `GET /api/v1/orders`
 - `GET /api/v1/position`
 - `POST /api/v1/order`
@@ -166,3 +169,18 @@ Before using with real funds, you should still add:
 - additional alert sinks (Discord/PagerDuty/etc.) if Telegram alone is not enough for operations
 - cancel-on-pause / flatten-on-safe-mode policies after live validation proves the right behavior
 - sandbox/small-size validation against your Backpack subaccount
+
+## Live short-only operator notes
+
+These were learned during production validation and are worth keeping in the repo docs instead of only in chat history.
+
+- `short_only` is intended to run on a clean account context (empty account or an account that already holds a short), not to "adopt" a large unrelated position.
+- The hard safety boundary is `GRID_MAX_POSITION_ABS`; adding more balance does **not** make it safe to attach this bot to an already-open short that is many times larger than the configured max position.
+- Under `short_only`, the service should:
+  - place maker `sell` orders to open/add short exposure
+  - place `reduceOnly=true` maker `buy` orders only when a short position already exists
+  - reject any order path that would flip net position positive via `short_only_long_flip_blocked`
+- When `GRID_ORDER_SIZE` is increased, re-check it against `GRID_MAX_POSITION_ABS`. For example, with `GRID_ORDER_SIZE=0.005` and `GRID_MAX_POSITION_ABS=0.02`, only four sell levels can fit before `max_position_breached` blocks additional exposure.
+- Backpack live order placement currently requires a numeric `clientId` (`uint32`) at the exchange API boundary even though the service still tracks a string `clientOrderId` internally.
+- For futures equity / available margin checks, prefer Backpack collateral data (`GET /api/v1/capital/collateral`) rather than relying only on `GET /api/v1/capital`.
+- If you need to operate a different Backpack subaccount, the cleanest current approach is to switch the production API key/secret to that subaccount's credentials; explicit `subaccountId` routing is not yet wired through the live production config.
