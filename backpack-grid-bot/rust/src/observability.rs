@@ -2,7 +2,7 @@ use anyhow::Result;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::{GridLevel, OrderIntent, RuntimeEvent, RuntimeHealth, ServiceCycleOutput, SyntheticFill};
+use crate::{ExecutionMode, GridLevel, OrderIntent, RuntimeEvent, RuntimeHealth, ServiceCycleOutput, SyntheticFill};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShadowOrderView {
@@ -29,6 +29,15 @@ pub struct ShadowHealthSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShadowExecutionSummary {
+    pub mode: Option<String>,
+    pub placed_count: usize,
+    pub cancelled_count: usize,
+    pub retained_count: usize,
+    pub final_order_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShadowReport {
     pub symbol: String,
     pub mark_price: Decimal,
@@ -36,11 +45,16 @@ pub struct ShadowReport {
     pub health_summary: ShadowHealthSummary,
     pub events: Vec<RuntimeEvent>,
     pub event_summary: ShadowEventSummary,
+    pub execution_summary: ShadowExecutionSummary,
     pub desired_orders: Vec<ShadowOrderView>,
     pub active_levels: Vec<GridLevel>,
     pub place_orders: Vec<ShadowOrderView>,
     pub cancel_orders: Vec<ShadowOrderView>,
     pub keep_orders: Vec<ShadowOrderView>,
+    pub executed_place_orders: Vec<ShadowOrderView>,
+    pub executed_cancel_orders: Vec<ShadowOrderView>,
+    pub executed_keep_orders: Vec<ShadowOrderView>,
+    pub executed_final_orders: Vec<ShadowOrderView>,
     pub missing_on_exchange: Vec<ShadowOrderView>,
     pub unexpected_on_exchange: Vec<ShadowOrderView>,
     pub rejected_levels: Vec<(GridLevel, String)>,
@@ -66,11 +80,38 @@ impl ShadowReport {
                 event_count: cycle.events.len(),
                 latest_messages: cycle.events.iter().take(5).map(|event| event.message.clone()).collect(),
             },
+            execution_summary: ShadowExecutionSummary {
+                mode: cycle.executed.as_ref().map(|executed| execution_mode_label(&executed.mode)),
+                placed_count: cycle.executed.as_ref().map(|executed| executed.placed.len()).unwrap_or(0),
+                cancelled_count: cycle.executed.as_ref().map(|executed| executed.cancelled.len()).unwrap_or(0),
+                retained_count: cycle.executed.as_ref().map(|executed| executed.retained.len()).unwrap_or(0),
+                final_order_count: cycle.executed.as_ref().map(|executed| executed.final_orders.len()).unwrap_or(0),
+            },
             desired_orders: cycle.planner.desired_orders.iter().map(order_view_from_intent).collect(),
             active_levels: cycle.planner.active_levels.clone(),
             place_orders: cycle.execution.place.iter().map(order_view_from_intent).collect(),
             cancel_orders: cycle.execution.cancel.iter().map(|o| order_view_from_intent(&o.intent)).collect(),
             keep_orders: cycle.execution.keep.iter().map(|o| order_view_from_intent(&o.intent)).collect(),
+            executed_place_orders: cycle
+                .executed
+                .as_ref()
+                .map(|executed| executed.placed.iter().map(|o| order_view_from_intent(&o.intent)).collect())
+                .unwrap_or_default(),
+            executed_cancel_orders: cycle
+                .executed
+                .as_ref()
+                .map(|executed| executed.cancelled.iter().map(|o| order_view_from_intent(&o.intent)).collect())
+                .unwrap_or_default(),
+            executed_keep_orders: cycle
+                .executed
+                .as_ref()
+                .map(|executed| executed.retained.iter().map(|o| order_view_from_intent(&o.intent)).collect())
+                .unwrap_or_default(),
+            executed_final_orders: cycle
+                .executed
+                .as_ref()
+                .map(|executed| executed.final_orders.iter().map(|o| order_view_from_intent(&o.intent)).collect())
+                .unwrap_or_default(),
             missing_on_exchange: cycle.reconciliation.diff.missing_on_exchange.iter().map(order_view_from_intent).collect(),
             unexpected_on_exchange: cycle
                 .reconciliation
@@ -96,6 +137,12 @@ impl ShadowReport {
     }
 }
 
+fn execution_mode_label(mode: &ExecutionMode) -> String {
+    match mode {
+        ExecutionMode::DryRun => "dry_run".to_string(),
+    }
+}
+
 fn order_view_from_intent(intent: &OrderIntent) -> ShadowOrderView {
     ShadowOrderView {
         client_order_id: intent.client_order_id.clone(),
@@ -113,12 +160,33 @@ mod tests {
 
     use super::*;
     use crate::{
-        execution::ExecutionPlan, reconcile::ReconcileOutcome, service::ServiceCycleOutput, PlannerOutput, Position,
-        RuntimeHealth, RuntimeState,
+        execution::{DryRunExecutionAdapter, ExecutionEngine, ExecutionPlan}, reconcile::ReconcileOutcome,
+        service::ServiceCycleOutput, AppConfig, GridMode, PlannerOutput, Position, RuntimeHealth, RuntimeState,
     };
+
+    fn cfg() -> AppConfig {
+        AppConfig {
+            symbol: "ETH_USDC_PERP".into(),
+            levels: 5,
+            spacing_bps: dec!(35),
+            order_size: dec!(0.003),
+            max_position_abs: dec!(0.02),
+            grid_mode: GridMode::ShortOnly,
+            grid_active_levels: 5,
+            grid_short_bias_sell_ratio: dec!(3),
+            grid_min_price: None,
+            grid_max_price: None,
+            leverage: dec!(10),
+            quote_asset: "USDC".into(),
+            kill_switch: false,
+        }
+    }
 
     #[test]
     fn report_serializes_cycle_summary() {
+        let executed = ExecutionEngine::new(cfg())
+            .execute(&DryRunExecutionAdapter::new(), &ExecutionPlan::default())
+            .unwrap();
         let cycle = ServiceCycleOutput {
             planner: PlannerOutput {
                 active_levels: vec![],
@@ -127,7 +195,7 @@ mod tests {
                 projected_position_after_orders: dec!(-0.006),
             },
             execution: ExecutionPlan::default(),
-            executed: None,
+            executed: Some(executed),
             reconciliation: ReconcileOutcome::default(),
             events: vec![],
             state: RuntimeState {
@@ -150,5 +218,7 @@ mod tests {
         assert!(json.contains("2260.4"));
         assert!(json.contains("health_summary"));
         assert!(json.contains("event_summary"));
+        assert!(json.contains("execution_summary"));
+        assert!(json.contains("dry_run"));
     }
 }

@@ -38,6 +38,11 @@ pub struct CycleSummaryRecord {
     pub place_orders: usize,
     pub cancel_orders: usize,
     pub keep_orders: usize,
+    pub executed_mode: Option<String>,
+    pub executed_place_orders: usize,
+    pub executed_cancel_orders: usize,
+    pub executed_keep_orders: usize,
+    pub executed_final_orders: usize,
     pub matched_orders: usize,
     pub synthetic_fill: bool,
 }
@@ -165,6 +170,11 @@ impl JsonFilePersistence {
             place_orders: cycle.execution.place.len(),
             cancel_orders: cycle.execution.cancel.len(),
             keep_orders: cycle.execution.keep.len(),
+            executed_mode: cycle.executed.as_ref().map(|executed| format!("{:?}", executed.mode).to_ascii_lowercase()),
+            executed_place_orders: cycle.executed.as_ref().map(|executed| executed.placed.len()).unwrap_or(0),
+            executed_cancel_orders: cycle.executed.as_ref().map(|executed| executed.cancelled.len()).unwrap_or(0),
+            executed_keep_orders: cycle.executed.as_ref().map(|executed| executed.retained.len()).unwrap_or(0),
+            executed_final_orders: cycle.executed.as_ref().map(|executed| executed.final_orders.len()).unwrap_or(0),
             matched_orders: cycle.reconciliation.diff.matched,
             synthetic_fill: cycle.reconciliation.synthetic_fill.is_some(),
         };
@@ -203,11 +213,32 @@ mod tests {
 
     use super::*;
     use crate::{
-        reconcile::ReconcileOutcome, service::ServiceCycleOutput, ExecutionPlan, PlannerOutput, Position, RuntimeHealth,
-        RuntimeState,
+        execution::{DryRunExecutionAdapter, ExecutionEngine, ExecutionPlan}, reconcile::ReconcileOutcome,
+        service::ServiceCycleOutput, AppConfig, GridMode, PlannerOutput, Position, RuntimeHealth, RuntimeState,
     };
 
+    fn cfg() -> AppConfig {
+        AppConfig {
+            symbol: "ETH_USDC_PERP".into(),
+            levels: 5,
+            spacing_bps: dec!(35),
+            order_size: dec!(0.003),
+            max_position_abs: dec!(0.02),
+            grid_mode: GridMode::ShortOnly,
+            grid_active_levels: 5,
+            grid_short_bias_sell_ratio: dec!(3),
+            grid_min_price: None,
+            grid_max_price: None,
+            leverage: dec!(10),
+            quote_asset: "USDC".into(),
+            kill_switch: false,
+        }
+    }
+
     fn sample_cycle() -> ServiceCycleOutput {
+        let executed = ExecutionEngine::new(cfg())
+            .execute(&DryRunExecutionAdapter::new(), &ExecutionPlan::default())
+            .unwrap();
         ServiceCycleOutput {
             planner: PlannerOutput {
                 active_levels: vec![],
@@ -216,7 +247,7 @@ mod tests {
                 projected_position_after_orders: dec!(0),
             },
             execution: ExecutionPlan::default(),
-            executed: None,
+            executed: Some(executed),
             reconciliation: ReconcileOutcome::default(),
             events: vec![crate::RuntimeEvent::service_state_changed(crate::ServiceState::Active, "active")],
             state: RuntimeState {
@@ -272,5 +303,7 @@ mod tests {
         assert!(body.contains("ETH_USDC_PERP"));
         assert!(body.contains("event_count"));
         assert!(body.contains("service_state"));
+        assert!(body.contains("executed_mode"));
+        assert!(body.contains("dryrun"));
     }
 }

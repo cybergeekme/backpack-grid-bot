@@ -50,7 +50,7 @@ impl ShadowRuntime {
             let cycle = self.run_once()?;
             let report = ShadowReport::from_cycle(&self.config.symbol, &cycle);
             println!(
-                "shadow symbol={} mark_price={} state={:?} pause_reason={:?} issues={:?} events={} desired={} cancels={} places={} matched={} synthetic_fill={} checkpoint={} report={} journal={} cycles={}",
+                "shadow symbol={} mark_price={} state={:?} pause_reason={:?} issues={:?} events={} desired={} cancels={} places={} executed_mode={} executed_places={} executed_cancels={} executed_final={} matched={} synthetic_fill={} checkpoint={} report={} journal={} cycles={}",
                 self.config.symbol,
                 cycle.state.last_mid_price.unwrap_or_default(),
                 cycle.state.health.service_state,
@@ -60,6 +60,10 @@ impl ShadowRuntime {
                 cycle.planner.desired_orders.len(),
                 cycle.execution.cancel.len(),
                 cycle.execution.place.len(),
+                report.execution_summary.mode.clone().unwrap_or_else(|| "none".to_string()),
+                report.execution_summary.placed_count,
+                report.execution_summary.cancelled_count,
+                report.execution_summary.final_order_count,
                 cycle.reconciliation.diff.matched,
                 cycle.reconciliation.synthetic_fill.is_some(),
                 self.persistence.path().display(),
