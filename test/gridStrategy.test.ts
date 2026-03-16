@@ -419,7 +419,7 @@ test('service emits Telegram alerts for REST-placed orders during grid sync even
   await service.stop();
 });
 
-test('service emits fill alerts with fee and realized pnl when enabled', async () => {
+test('service emits filled alerts with fee and realized pnl when fills are enabled', async () => {
   resetGridEnv();
   process.env.GRID_LEVELS = '1';
   process.env.GRID_SPACING_BPS = '50';
@@ -431,6 +431,7 @@ test('service emits fill alerts with fee and realized pnl when enabled', async (
   process.env.TELEGRAM_ALERTS_ENABLED = 'true';
   process.env.TELEGRAM_ALERT_LEVEL = 'info';
   process.env.TELEGRAM_NOTIFY_FILLS = 'true';
+  process.env.TELEGRAM_NOTIFY_ORDER_EVENTS = 'true';
 
   const delivered: AlertEvent[] = [];
   const alerts = new AlertManager(
@@ -469,16 +470,21 @@ test('service emits fill alerts with fee and realized pnl when enabled', async (
   adapter.movePrice(99);
   await new Promise((resolve) => setTimeout(resolve, 10));
 
-  const fillAlerts = delivered.filter((event) => event.title === 'Order fill');
-  assert.equal(fillAlerts.length, 2);
-  assert.equal(fillAlerts[0]?.details?.openingFill, true);
-  assert.equal(fillAlerts[0]?.details?.realizedPnl, 0);
-  assert.equal(fillAlerts[0]?.details?.positionAfter, -0.01);
-  assert.equal(fillAlerts[1]?.details?.openingFill, false);
-  assert.equal(fillAlerts[1]?.details?.closedQty, 0.01);
-  assert.equal(fillAlerts[1]?.details?.positionAfter, 0);
-  assert.equal(fillAlerts[1]?.details?.realizedPnl, 0.02);
-  assert.ok(Number(fillAlerts[1]?.details?.fee) > 0);
+  const filledAlerts = delivered.filter((event) => event.title === 'Order filled');
+  assert.equal(filledAlerts.length, 2);
+  assert.equal(filledAlerts[0]?.details?.openingFill, true);
+  assert.equal(filledAlerts[0]?.details?.realizedPnl, 0);
+  assert.equal(filledAlerts[0]?.details?.positionAfter, -0.01);
+  assert.equal(filledAlerts[1]?.details?.openingFill, false);
+  assert.equal(filledAlerts[1]?.details?.closedQty, 0.01);
+  assert.equal(filledAlerts[1]?.details?.positionAfter, 0);
+  assert.equal(filledAlerts[1]?.details?.realizedPnl, 0.02);
+  assert.ok(Number(filledAlerts[1]?.details?.fee) > 0);
+
+  const plainFilledStatusAlerts = delivered.filter(
+    (event) => event.key.startsWith('order:') && event.title === 'Order filled'
+  );
+  assert.equal(plainFilledStatusAlerts.length, 0);
 
   await service.stop();
 });

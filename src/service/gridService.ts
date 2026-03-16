@@ -394,7 +394,9 @@ export class GridTradingService {
           status: event.order.status,
           filledQty: event.order.filledQty
         });
-        if (this.config.telegramNotifyOrderEvents) {
+        const shouldEmitOrderStatusAlert = this.config.telegramNotifyOrderEvents
+          && !(event.order.status === 'filled' && this.config.telegramNotifyFills);
+        if (shouldEmitOrderStatusAlert) {
           this.emitAlert({
             key: `order:${event.order.orderId}:${event.order.status}:${event.order.ts}`,
             severity: event.order.status === 'rejected' ? 'warn' : 'info',
@@ -445,8 +447,8 @@ export class GridTradingService {
           this.emitAlert({
             key: `fill:${event.fill.orderId}:${event.fill.ts}`,
             severity: 'info',
-            title: 'Order fill',
-            message: `${event.fill.side.toUpperCase()} fill recorded for ${event.fill.symbol}.`,
+            title: 'Order filled',
+            message: `${event.fill.side.toUpperCase()} ${event.fill.symbol} order filled.`,
             details: {
               symbol: event.fill.symbol,
               side: event.fill.side,
