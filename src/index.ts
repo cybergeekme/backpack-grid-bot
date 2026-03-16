@@ -13,7 +13,7 @@ function createAdapter(config: ReturnType<typeof loadConfig>) {
     ? new BackpackFuturesAdapter({
         apiKey: config.backpackApiKey,
         apiSecret: config.backpackApiSecret,
-        liveEnabled: config.backpackLiveEnabled,
+        tradingEnabled: config.backpackTradingEnabled,
         recvWindowMs: config.backpackWindowMs,
         enableWebSocket: config.backpackWsEnabled,
         symbol: config.symbol

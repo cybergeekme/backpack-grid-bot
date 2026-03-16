@@ -121,6 +121,7 @@ export class GridTradingService {
       });
     }
 
+    const tradingAccessMode = this.adapter.getTradingAccessMode();
     const syncResult = await this.oms.syncGrid(this.config.symbol, desired);
     this.state.setWorkingOrders(syncResult.orders);
     this.persistence.persistOrders(syncResult.orders);
@@ -158,7 +159,8 @@ export class GridTradingService {
       midPrice,
       workingOrders: syncResult.orders.length,
       position: refreshedPosition.size,
-      balance: balance.available
+      balance: balance.available,
+      tradingAccessMode
     });
   }
 
@@ -193,7 +195,7 @@ export class GridTradingService {
 
   private restorePersistedState(): void {
     const recovery = this.persistence.loadLatestRecovery();
-    const recovered = recovery.checkpoint?.state ?? recovery.state;
+    const recovered = recovery.state;
     this.runtimeHealth = recovery.checkpoint?.health ?? { pauseRequested: false };
     this.state.restore(recovered);
     if (recovered.position) {
@@ -323,9 +325,13 @@ export class GridTradingService {
   }
 
   private persistRuntimeCheckpoint(reason: string): void {
+    const state = this.state.get();
     const checkpoint: RuntimeCheckpoint = {
       reason,
-      state: this.state.get(),
+      state: {
+        snapshot: state.snapshot,
+        position: state.position
+      },
       adapter: hasCheckpointSupport(this.adapter) ? this.adapter.exportCheckpoint() : undefined,
       health: this.runtimeHealth,
       ts: Date.now()

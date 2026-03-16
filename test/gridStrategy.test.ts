@@ -14,6 +14,7 @@ import { ServiceRunner } from '../src/service/serviceRunner';
 import { GridStrategyEngine } from '../src/strategy/gridStrategy';
 import type { Position } from '../src/types';
 import { MockExchangeAdapter } from '../src/adapters/mockExchangeAdapter';
+import { BackpackFuturesAdapter } from '../src/adapters/backpackAdapter';
 
 function withDbPath(name: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
@@ -233,6 +234,42 @@ test('alert manager deduplicates repeated events and swallows sink failures', as
   assert.equal(delivered[1]?.key, 'other-key');
 });
 
+test('runtime checkpoints stay compact and recover from persisted orders instead of embedding them', async () => {
+  process.env.GRID_LEVELS = '1';
+  process.env.GRID_SPACING_BPS = '50';
+  process.env.GRID_ORDER_SIZE = '0.01';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_KILL_SWITCH = 'false';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-runtime-checkpoint');
+  process.env.GRID_SERVICE_NAME = 'grid-runtime-checkpoint-test';
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(100, config.symbol, 10_000);
+  const service = new GridTradingService(config, adapter);
+  await service.start();
+  await service.rebalance();
+
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(config.persistencePath, { readOnly: true });
+  const row = db
+    .prepare(
+      `SELECT payload FROM service_checkpoints
+       WHERE service_name = ? AND checkpoint_kind = 'runtime'
+       ORDER BY created_ts DESC, id DESC
+       LIMIT 1`
+    )
+    .get(config.serviceName) as { payload: string };
+  db.close();
+
+  const checkpoint = JSON.parse(row.payload);
+  assert.equal(Array.isArray(checkpoint.state?.workingOrders), false);
+  assert.equal(Array.isArray(checkpoint.state?.recentFills), false);
+  assert.ok((row.payload as string).length < 50_000);
+
+  await service.stop();
+});
+
 test('service recovers persisted snapshot, fills, and mock adapter checkpoint on restart', async () => {
   process.env.GRID_LEVELS = '1';
   process.env.GRID_SPACING_BPS = '50';
@@ -263,4 +300,115 @@ test('service recovers persisted snapshot, fills, and mock adapter checkpoint on
   assert.equal((await adapter2.getOpenOrders(config.symbol)).length, before.workingOrders.length);
 
   await service2.stop();
+});
+
+
+test('backpack adapter exposes read-only mode and blocks mutations while disconnected from live trading', async () => {
+  const adapter = new BackpackFuturesAdapter({ enableWebSocket: false, tradingEnabled: false });
+  assert.equal(adapter.getTradingAccessMode(), 'read-only');
+
+  await assert.rejects(
+    () => adapter.placeOrder({
+      clientOrderId: 'readonly-order',
+      symbol: 'ETH_USDC_PERP',
+      side: 'buy',
+      type: 'limit',
+      price: 100,
+      qty: 0.01,
+      postOnly: true,
+      reduceOnly: false
+    }),
+    /not connected/i
+  );
+});
+
+test('order manager skips mutations when adapter is read-only', async () => {
+  const adapter = new MockExchangeAdapter(100, 'BTC_USDC_PERP');
+  const originalMode = adapter.getTradingAccessMode.bind(adapter);
+  adapter.getTradingAccessMode = () => 'read-only';
+
+  let placeCalls = 0;
+  let cancelCalls = 0;
+  const originalPlace = adapter.placeOrder.bind(adapter);
+  const originalCancel = adapter.cancelOrder.bind(adapter);
+  adapter.placeOrder = async (request) => {
+    placeCalls += 1;
+    return originalPlace(request);
+  };
+  adapter.cancelOrder = async (symbol, orderId) => {
+    cancelCalls += 1;
+    return originalCancel(symbol, orderId);
+  };
+
+  await originalPlace({
+    clientOrderId: 'existing-buy',
+    symbol: 'BTC_USDC_PERP',
+    side: 'buy',
+    type: 'limit',
+    price: 99,
+    qty: 0.01,
+    postOnly: true,
+    reduceOnly: false
+  });
+  placeCalls = 0;
+
+  const oms = new OrderManager(adapter);
+  const result = await oms.syncGrid('BTC_USDC_PERP', [{
+    clientOrderId: 'target-sell',
+    symbol: 'BTC_USDC_PERP',
+    side: 'sell',
+    type: 'limit',
+    price: 101,
+    qty: 0.01,
+    postOnly: true,
+    reduceOnly: false
+  }]);
+
+  assert.equal(adapter.getTradingAccessMode(), 'read-only');
+  assert.equal(placeCalls, 0);
+  assert.equal(cancelCalls, 0);
+  assert.equal(result.orders.length, 1);
+  assert.equal(result.reconciliation.missingOnExchange.length, 1);
+  assert.equal(result.reconciliation.unexpectedOnExchange.length, 1);
+  adapter.getTradingAccessMode = originalMode;
+});
+
+
+test('service starts and rebalances safely in read-only mode without placing or cancelling orders', async () => {
+  process.env.GRID_LEVELS = '1';
+  process.env.GRID_SPACING_BPS = '50';
+  process.env.GRID_ORDER_SIZE = '0.01';
+  process.env.GRID_MAX_POSITION_ABS = '1';
+  process.env.GRID_KILL_SWITCH = 'false';
+  process.env.GRID_USE_BACKPACK = 'false';
+  process.env.GRID_DB_PATH = withDbPath('grid-readonly');
+  process.env.GRID_SERVICE_NAME = 'grid-readonly-test';
+
+  const config = loadConfig();
+  const adapter = new MockExchangeAdapter(100, config.symbol, 10_000);
+  adapter.getTradingAccessMode = () => 'read-only';
+
+  let placeCalls = 0;
+  let cancelCalls = 0;
+  adapter.placeOrder = async () => {
+    placeCalls += 1;
+    throw new Error('placeOrder should not be called in read-only mode');
+  };
+  adapter.cancelOrder = async () => {
+    cancelCalls += 1;
+    throw new Error('cancelOrder should not be called in read-only mode');
+  };
+
+  const service = new GridTradingService(config, adapter);
+  await service.start();
+  await service.rebalance();
+  const state = service.snapshot();
+
+  assert.equal(placeCalls, 0);
+  assert.equal(cancelCalls, 0);
+  assert.equal(state.snapshot?.midPrice, 100);
+  assert.equal(state.position?.size, 0);
+  assert.equal(state.workingOrders.length, 0);
+
+  await service.stop();
 });

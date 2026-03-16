@@ -13,7 +13,7 @@ type JsonObject = Record<string, unknown>;
 interface BackpackAdapterOptions {
   apiKey?: string;
   apiSecret?: string;
-  liveEnabled?: boolean;
+  tradingEnabled?: boolean;
   recvWindowMs?: number;
   enableWebSocket?: boolean;
   wsUrl?: string;
@@ -85,7 +85,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
   private readonly logger = new Logger('BackpackFuturesAdapter');
   private readonly apiKey?: string;
   private readonly apiSecret?: crypto.KeyObject;
-  private readonly liveEnabled: boolean;
+  private readonly tradingEnabled: boolean;
   private readonly recvWindowMs: number;
   private readonly webSocketEnabled: boolean;
   private readonly webSocket?: BackpackWebSocketClient;
@@ -94,7 +94,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
 
   constructor(options: BackpackAdapterOptions = {}) {
     this.apiKey = options.apiKey ?? process.env.BACKPACK_API_KEY;
-    this.liveEnabled = options.liveEnabled ?? ['1', 'true', 'yes', 'on'].includes((process.env.BACKPACK_ENABLE_LIVE ?? '').toLowerCase());
+    this.tradingEnabled = options.tradingEnabled ?? ['1', 'true', 'yes', 'on'].includes((process.env.BACKPACK_ENABLE_LIVE ?? '').toLowerCase());
     this.recvWindowMs = Math.max(1, Math.min(60_000, options.recvWindowMs ?? Number(process.env.BACKPACK_WINDOW_MS ?? DEFAULT_WINDOW_MS)));
     this.webSocketEnabled = options.enableWebSocket ?? ['1', 'true', 'yes', 'on'].includes((process.env.BACKPACK_ENABLE_WS ?? 'true').toLowerCase());
 
@@ -105,7 +105,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
       this.webSocket = new BackpackWebSocketClient({
         apiKey: this.apiKey,
         apiSecret: this.apiSecret,
-        liveEnabled: this.liveEnabled,
+        liveEnabled: this.tradingEnabled,
         wsUrl: options.wsUrl,
         symbol: options.symbol ?? process.env.GRID_SYMBOL
       });
@@ -120,15 +120,11 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
     return () => this.eventListeners.delete(listener);
   }
 
-  async connect(): Promise<void> {
-    if (!this.liveEnabled) {
-      this.logger.warn('Backpack adapter blocked by safety flag.', { env: 'Set BACKPACK_ENABLE_LIVE=true to enable authenticated REST calls.' });
-      throw new Error('Backpack live adapter is disabled. Set BACKPACK_ENABLE_LIVE=true and provide BACKPACK_API_KEY/BACKPACK_API_SECRET to enable.');
-    }
-    if (!this.apiKey || !this.apiSecret) {
-      throw new Error('Backpack credentials missing. Expected BACKPACK_API_KEY and BACKPACK_API_SECRET (base64 Ed25519 seed).');
-    }
+  getTradingAccessMode(): 'read-only' | 'live' {
+    return this.tradingEnabled ? 'live' : 'read-only';
+  }
 
+  async connect(): Promise<void> {
     await this.publicRequest<JsonObject>('GET', '/api/v1/time');
     if (this.webSocket) {
       try {
@@ -140,7 +136,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
       }
     }
     this.connected = true;
-    this.logger.info('Connected to Backpack REST API.', { recvWindowMs: this.recvWindowMs, websocket: Boolean(this.webSocket) });
+    this.logger.info('Connected to Backpack REST API.', { recvWindowMs: this.recvWindowMs, websocket: Boolean(this.webSocket), tradingAccessMode: this.getTradingAccessMode() });
   }
 
   async disconnect(): Promise<void> {
@@ -151,6 +147,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
 
   async getBalance(asset: string): Promise<Balance> {
     this.assertConnected();
+    this.assertCredentials('signed read balance');
     const balances = await this.signedRequest<unknown[]>('GET', '/api/v1/capital', INSTRUCTIONS.balanceQuery, {});
     const row = balances.find((entry) => typeof entry === 'object' && entry !== null && String((entry as JsonObject).asset ?? '') === asset) as JsonObject | undefined;
     if (!row) {
@@ -165,6 +162,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
 
   async getOpenOrders(symbol: string): Promise<Order[]> {
     this.assertConnected();
+    this.assertCredentials('signed read open orders');
     const payload = await this.signedRequest<unknown[]>('GET', '/api/v1/orders', INSTRUCTIONS.orderQueryAll, { symbol });
     return payload
       .filter((entry) => typeof entry === 'object' && entry !== null)
@@ -174,6 +172,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
 
   async getPosition(symbol: string): Promise<Position> {
     this.assertConnected();
+    this.assertCredentials('signed read position');
     const payload = await this.signedRequest<JsonObject>('GET', '/api/v1/position', INSTRUCTIONS.positionQuery, { symbol });
     const netQuantity = Number(payload.netQuantity ?? payload.quantity ?? payload.positionQty ?? 0);
     const entryPrice = Number(payload.entryPrice ?? payload.averageEntryPrice ?? 0);
@@ -183,6 +182,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
 
   async placeOrder(request: OrderRequest): Promise<Order> {
     this.assertConnected();
+    this.assertTradingEnabled('placeOrder');
     const side = request.side === 'buy' ? 'Bid' : 'Ask';
     const payload: JsonObject = {
       symbol: request.symbol,
@@ -204,6 +204,7 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
 
   async cancelOrder(symbol: string, orderId: string): Promise<void> {
     this.assertConnected();
+    this.assertTradingEnabled('cancelOrder');
     await this.signedRequest('DELETE', '/api/v1/order', INSTRUCTIONS.orderCancel, { symbol, orderId });
   }
 
@@ -220,6 +221,19 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
   private assertConnected(): void {
     if (!this.connected) {
       throw new Error('Backpack adapter is not connected. Call connect() first.');
+    }
+  }
+
+  private assertCredentials(operation: string): void {
+    if (!this.apiKey || !this.apiSecret) {
+      throw new Error(`Backpack credentials missing for ${operation}. Expected BACKPACK_API_KEY and BACKPACK_API_SECRET.`);
+    }
+  }
+
+  private assertTradingEnabled(operation: string): void {
+    this.assertCredentials(operation);
+    if (!this.tradingEnabled) {
+      throw new Error(`Backpack adapter is in read-only mode; refusing to ${operation}. Set BACKPACK_ENABLE_LIVE=true to enable order mutations.`);
     }
   }
 
@@ -254,14 +268,16 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
   }
 
   private async signedRequest<T>(method: HttpMethod, path: string, instruction: string, params: JsonObject): Promise<T> {
-    if (!this.apiKey) {
+    this.assertCredentials(`signed request ${instruction}`);
+    const apiKey = this.apiKey;
+    if (!apiKey) {
       throw new Error('Backpack API key unavailable.');
     }
     const timestamp = Date.now();
     const headers = {
       'X-Timestamp': String(timestamp),
       'X-Window': String(this.recvWindowMs),
-      'X-API-Key': this.apiKey,
+      'X-API-Key': apiKey,
       'X-Signature': this.signature(instruction, params, timestamp)
     };
     return this.request<T>(method, path, params, headers);

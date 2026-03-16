@@ -23,7 +23,7 @@ A production-oriented TypeScript skeleton for a futures grid trading service.
 ## Safety
 
 - The demo and service both use only a mock exchange by default.
-- Backpack live mode is opt-in and hard-disabled unless `BACKPACK_ENABLE_LIVE=true` is set.
+- Backpack trading mode is opt-in: `GRID_USE_BACKPACK=true` with `BACKPACK_ENABLE_LIVE=false` now runs in true read-only mode; set `BACKPACK_ENABLE_LIVE=true` only to allow order mutations.
 - Service mode has explicit health states: `STARTING`, `ACTIVE`, `DEGRADED`, `PAUSED`, `SAFE_MODE`, `STOPPED`.
 - Out-of-range price moves pause grid placement instead of blindly chasing price.
 - Consecutive loop failures trip a circuit breaker into `SAFE_MODE`; reconciliation continues but new rebalances stop.
@@ -56,6 +56,8 @@ Optional:
 - `GRID_MAX_POSITION_ABS` (default: `0.05`)
 - `GRID_KILL_SWITCH=true` to force strategy shutdown
 - `GRID_USE_BACKPACK=true` to switch from mock exchange to Backpack REST adapter
+  - With `BACKPACK_ENABLE_LIVE=false`, the adapter runs in read-only mode: connect, fetch time/mark price, and perform signed reads like balance/open-orders/position, but never place/cancel orders.
+  - With `BACKPACK_ENABLE_LIVE=true`, the same adapter is allowed to mutate orders.
 - `GRID_DB_PATH=./var/backpack-grid-bot.sqlite` SQLite database path for persistent state
 - `GRID_SERVICE_NAME=backpack-grid-bot` logical service name used to partition persisted rows
 - `GRID_SERVICE_LOOP_MS=15000` main service loop interval
@@ -70,10 +72,11 @@ Optional:
 - `TELEGRAM_ALERT_LEVEL=warn` minimum severity to send: `info`, `warn`, `critical`
 - `TELEGRAM_ALERT_DEDUP_MS=300000` per-alert dedup window in milliseconds
 - `TELEGRAM_NOTIFY_FILLS=false` set true to send fill notifications in addition to safety alerts
-- `BACKPACK_ENABLE_LIVE=true` to actually allow authenticated Backpack calls
+- `BACKPACK_ENABLE_LIVE=false` keeps Backpack in read-only mode; `true` enables order placement/cancel mutations
 - `BACKPACK_ENABLE_WS=true` to enable the Backpack WS client when live mode is enabled (default: true)
 - `BACKPACK_API_KEY=<base64 public key>`
 - `BACKPACK_API_SECRET=<base64 ed25519 seed>`
+  - These are still required for Backpack signed reads (`getBalance`, `getOpenOrders`, `getPosition`) even in read-only mode.
 - `BACKPACK_WINDOW_MS=5000`
 - `BACKPACK_WS_URL=wss://ws.backpack.exchange` to override the default endpoint while testing
 
@@ -86,7 +89,7 @@ The service now stores the following in SQLite:
 - fills
 - reconciliation events
 - risk rejection events
-- service checkpoints, including a runtime snapshot payload
+- service checkpoints, including a compact runtime checkpoint payload
 
 On startup, the service loads the latest persisted runtime checkpoint and restores:
 
@@ -96,7 +99,7 @@ On startup, the service loads the latest persisted runtime checkpoint and restor
 - recent fills
 - mock adapter internals in demo mode
 
-SQLite is opened in WAL mode with `synchronous=NORMAL` for a decent durability/latency trade-off on a single-host service.
+SQLite is opened in WAL mode with `synchronous=NORMAL` for a decent durability/latency trade-off on a single-host service. Runtime checkpoints are intentionally compact now: they keep snapshot/position metadata plus a bounded adapter checkpoint, while working orders and fills continue to persist in their dedicated tables. Service checkpoints are also pruned per kind so they cannot grow without bound during long-running sessions.
 
 ## Deployment with systemd
 

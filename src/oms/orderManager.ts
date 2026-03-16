@@ -17,6 +17,18 @@ export class OrderManager {
 
   async syncGrid(symbol: string, desired: OrderRequest[]): Promise<SyncGridResult> {
     const existing = await this.adapter.getOpenOrders(symbol);
+    if (this.adapter.getTradingAccessMode() === 'read-only') {
+      this.seedWorkingOrders(existing);
+      const reconciliation = this.reconciliation.compare(existing, desired);
+      this.logger.warn('Read-only adapter mode: skipping grid mutations.', {
+        symbol,
+        existing: existing.length,
+        desired: desired.length,
+        missingOnExchange: reconciliation.missingOnExchange.length,
+        unexpectedOnExchange: reconciliation.unexpectedOnExchange.length
+      });
+      return { orders: existing, reconciliation };
+    }
     this.seedWorkingOrders(existing);
     const desiredKeys = new Set(desired.map((o) => this.key(o.side, o.price, o.qty)));
 

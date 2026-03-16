@@ -4,8 +4,8 @@ import type { AdapterEventListener, Balance, CheckpointCapableAdapter, ExchangeA
 interface MockExchangeCheckpoint {
   currentPrice: number;
   symbol: string;
-  orders: Order[];
-  fills: Fill[];
+  openOrders: Order[];
+  recentFills: Fill[];
   position: Position;
   balance: Balance;
   nextId: number;
@@ -24,6 +24,10 @@ export class MockExchangeAdapter implements ExchangeAdapter, CheckpointCapableAd
   constructor(private currentPrice: number, private readonly symbol: string, initialCash = 100_000) {
     this.position = { symbol, size: 0, entryPrice: 0, unrealizedPnl: 0 };
     this.balance = { asset: 'USDC', total: initialCash, available: initialCash };
+  }
+
+  getTradingAccessMode() {
+    return 'mock' as const;
   }
 
   onEvent(listener: AdapterEventListener): () => void {
@@ -113,8 +117,10 @@ export class MockExchangeAdapter implements ExchangeAdapter, CheckpointCapableAd
     return {
       currentPrice: this.currentPrice,
       symbol: this.symbol,
-      orders: [...this.orders.values()].map((order) => ({ ...order })),
-      fills: this.getFills(),
+      openOrders: [...this.orders.values()]
+        .filter((order) => order.status === 'open')
+        .map((order) => ({ ...order })),
+      recentFills: this.getFills().slice(-20),
       position: { ...this.position },
       balance: { ...this.balance },
       nextId: this.nextId
@@ -126,10 +132,10 @@ export class MockExchangeAdapter implements ExchangeAdapter, CheckpointCapableAd
     if (!checkpoint || checkpoint.symbol !== this.symbol) return;
     this.currentPrice = checkpoint.currentPrice;
     this.orders.clear();
-    for (const order of checkpoint.orders ?? []) {
+    for (const order of checkpoint.openOrders ?? []) {
       this.orders.set(order.orderId, { ...order });
     }
-    this.fills.splice(0, this.fills.length, ...(checkpoint.fills ?? []).map((fill) => ({ ...fill })));
+    this.fills.splice(0, this.fills.length, ...((checkpoint.recentFills ?? []).map((fill) => ({ ...fill }))));
     this.position = { ...checkpoint.position };
     this.balance = { ...checkpoint.balance };
     this.nextId = checkpoint.nextId;

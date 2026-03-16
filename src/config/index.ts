@@ -10,7 +10,7 @@ export interface AppConfig {
   quoteAsset: string;
   killSwitch: boolean;
   useBackpack: boolean;
-  backpackLiveEnabled: boolean;
+  backpackTradingEnabled: boolean;
   backpackWsEnabled: boolean;
   backpackApiKey?: string;
   backpackApiSecret?: string;
@@ -66,7 +66,7 @@ export function loadConfig(): AppConfig {
     quoteAsset: process.env.GRID_QUOTE_ASSET ?? 'USDC',
     killSwitch: bool('GRID_KILL_SWITCH', false),
     useBackpack: bool('GRID_USE_BACKPACK', false),
-    backpackLiveEnabled: bool('BACKPACK_ENABLE_LIVE', false),
+    backpackTradingEnabled: bool('BACKPACK_ENABLE_LIVE', false),
     backpackWsEnabled: bool('BACKPACK_ENABLE_WS', true),
     backpackApiKey: process.env.BACKPACK_API_KEY,
     backpackApiSecret: process.env.BACKPACK_API_SECRET,

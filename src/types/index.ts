@@ -1,6 +1,7 @@
 export type Side = 'buy' | 'sell';
 export type OrderType = 'limit' | 'market';
 export type OrderStatus = 'new' | 'open' | 'filled' | 'cancelled' | 'rejected';
+export type TradingAccessMode = 'mock' | 'read-only' | 'live';
 
 export interface MarketTick {
   symbol: string;
@@ -101,9 +102,14 @@ export interface RiskEvent {
   ts: number;
 }
 
+export interface RuntimeCheckpointState {
+  snapshot?: StrategySnapshot;
+  position?: Position;
+}
+
 export interface RuntimeCheckpoint {
   reason: string;
-  state: RuntimeState;
+  state: RuntimeCheckpointState;
   adapter?: unknown;
   health?: ServiceRuntimeHealth;
   ts: number;
@@ -157,6 +163,7 @@ export type AdapterEventListener = (event: AdapterEvent) => void;
 
 export interface ExchangeAdapter {
   readonly name: string;
+  getTradingAccessMode(): TradingAccessMode;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   getBalance(asset: string): Promise<Balance>;

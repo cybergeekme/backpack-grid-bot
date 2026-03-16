@@ -19,6 +19,12 @@ interface RecoveryBundle {
   checkpoint?: RuntimeCheckpoint;
 }
 
+const CHECKPOINT_RETENTION: Record<string, number> = {
+  runtime: 200,
+  position: 500,
+  connection: 200
+};
+
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
@@ -85,14 +91,16 @@ export class SqlitePersistence {
       )
       .get(this.serviceName) as { payload: string } | undefined;
 
+    const checkpoint = checkpointRow ? parseJson<RuntimeCheckpoint>(checkpointRow.payload) : undefined;
+
     return {
       state: {
-        snapshot: snapshotRow ? parseJson<StrategySnapshot>(snapshotRow.payload) : undefined,
-        position: positionRow ? parseJson<Position>(positionRow.payload) : undefined,
+        snapshot: checkpoint?.state.snapshot ?? (snapshotRow ? parseJson<StrategySnapshot>(snapshotRow.payload) : undefined),
+        position: checkpoint?.state.position ?? (positionRow ? parseJson<Position>(positionRow.payload) : undefined),
         workingOrders: orderRows.map((row) => parseJson<Order>(row.payload)),
         recentFills: fillRows.map((row) => parseJson<Fill>(row.payload))
       },
-      checkpoint: checkpointRow ? parseJson<RuntimeCheckpoint>(checkpointRow.payload) : undefined
+      checkpoint
     };
   }
 
@@ -184,9 +192,29 @@ export class SqlitePersistence {
   }
 
   persistCheckpoint(kind: string, payload: unknown): void {
+    const now = Date.now();
     this.db
       .prepare('INSERT INTO service_checkpoints(service_name, checkpoint_kind, payload, created_ts) VALUES (?, ?, ?, ?)')
-      .run(this.serviceName, kind, JSON.stringify(payload), Date.now());
+      .run(this.serviceName, kind, JSON.stringify(payload), now);
+    this.pruneCheckpoints(kind);
+  }
+
+  private pruneCheckpoints(kind: string): void {
+    const keep = CHECKPOINT_RETENTION[kind];
+    if (!keep) return;
+    this.db
+      .prepare(
+        `DELETE FROM service_checkpoints
+         WHERE service_name = ?
+           AND checkpoint_kind = ?
+           AND id NOT IN (
+             SELECT id FROM service_checkpoints
+             WHERE service_name = ? AND checkpoint_kind = ?
+             ORDER BY created_ts DESC, id DESC
+             LIMIT ?
+           )`
+      )
+      .run(this.serviceName, kind, this.serviceName, kind, keep);
   }
 
   private initSchema(): void {
