@@ -216,6 +216,7 @@ mod tests {
                 projected_position_after_orders: dec!(0),
             },
             execution: ExecutionPlan::default(),
+            executed: None,
             reconciliation: ReconcileOutcome::default(),
             events: vec![crate::RuntimeEvent::service_state_changed(crate::ServiceState::Active, "active")],
             state: RuntimeState {

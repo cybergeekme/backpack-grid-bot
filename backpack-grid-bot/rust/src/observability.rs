@@ -127,6 +127,7 @@ mod tests {
                 projected_position_after_orders: dec!(-0.006),
             },
             execution: ExecutionPlan::default(),
+            executed: None,
             reconciliation: ReconcileOutcome::default(),
             events: vec![],
             state: RuntimeState {

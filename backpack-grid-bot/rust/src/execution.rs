@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::Result;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +47,65 @@ pub struct SyncGridResult {
     pub placed: Vec<OrderIntent>,
     pub cancelled: Vec<ExistingOrder>,
     pub diff: ReconciliationDiff,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionMode {
+    DryRun,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutedPlan {
+    pub mode: ExecutionMode,
+    pub cancelled: Vec<ExistingOrder>,
+    pub placed: Vec<ExistingOrder>,
+    pub retained: Vec<ExistingOrder>,
+    pub final_orders: Vec<ExistingOrder>,
+}
+
+pub trait ExecutionAdapter {
+    fn mode(&self) -> ExecutionMode;
+    fn execute(&self, plan: &ExecutionPlan) -> Result<ExecutedPlan>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DryRunExecutionAdapter;
+
+impl DryRunExecutionAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl ExecutionAdapter for DryRunExecutionAdapter {
+    fn mode(&self) -> ExecutionMode {
+        ExecutionMode::DryRun
+    }
+
+    fn execute(&self, plan: &ExecutionPlan) -> Result<ExecutedPlan> {
+        let placed = plan
+            .place
+            .iter()
+            .cloned()
+            .map(|intent| ExistingOrder {
+                order_id: format!("dryrun:{}", intent.client_order_id),
+                client_order_id: intent.client_order_id.clone(),
+                intent,
+            })
+            .collect::<Vec<_>>();
+        let retained = plan.keep.clone();
+        let cancelled = plan.cancel.clone();
+        let mut final_orders = retained.clone();
+        final_orders.extend(placed.clone());
+
+        Ok(ExecutedPlan {
+            mode: ExecutionMode::DryRun,
+            cancelled,
+            placed,
+            retained,
+            final_orders,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +169,10 @@ impl ExecutionEngine {
 
     pub fn plan_from_planner_output(&self, planner_output: &PlannerOutput, existing: &[ExistingOrder]) -> ExecutionPlan {
         self.build_plan(&planner_output.desired_orders, existing)
+    }
+
+    pub fn execute<A: ExecutionAdapter>(&self, adapter: &A, plan: &ExecutionPlan) -> Result<ExecutedPlan> {
+        adapter.execute(plan)
     }
 
     pub fn order_key(&self, intent: &OrderIntent) -> OrderKey {
@@ -226,5 +290,23 @@ mod tests {
         let plan = engine.plan_from_planner_output(&planner_output, &existing_orders);
         assert_eq!(plan.place.len(), planner_output.desired_orders.len());
         assert!(plan.cancel.is_empty());
+    }
+
+    #[test]
+    fn dry_run_executor_projects_final_orders() {
+        let engine = ExecutionEngine::new(cfg());
+        let desired = vec![
+            intent(OrderSide::Buy, dec!(2252.48), dec!(0.003), true),
+            intent(OrderSide::Sell, dec!(2268.32), dec!(0.003), false),
+        ];
+        let existing_orders = vec![existing("2", intent(OrderSide::Sell, dec!(2276.24), dec!(0.003), false))];
+        let plan = engine.build_plan(&desired, &existing_orders);
+
+        let executed = engine.execute(&DryRunExecutionAdapter::new(), &plan).unwrap();
+        assert_eq!(executed.mode, ExecutionMode::DryRun);
+        assert_eq!(executed.cancelled.len(), 1);
+        assert_eq!(executed.placed.len(), 2);
+        assert_eq!(executed.final_orders.len(), 2);
+        assert!(executed.final_orders.iter().all(|order| order.order_id.starts_with("dryrun:") || order.order_id == "2"));
     }
 }
