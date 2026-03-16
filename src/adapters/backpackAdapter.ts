@@ -173,11 +173,19 @@ export class BackpackFuturesAdapter implements ExchangeAdapter {
   async getPosition(symbol: string): Promise<Position> {
     this.assertConnected();
     this.assertCredentials('signed read position');
-    const payload = await this.signedRequest<JsonObject>('GET', '/api/v1/position', INSTRUCTIONS.positionQuery, { symbol });
-    const netQuantity = Number(payload.netQuantity ?? payload.quantity ?? payload.positionQty ?? 0);
-    const entryPrice = Number(payload.entryPrice ?? payload.averageEntryPrice ?? 0);
-    const unrealizedPnl = Number(payload.unrealizedPnl ?? payload.pnl ?? 0);
-    return { symbol, size: netQuantity, entryPrice, unrealizedPnl };
+    try {
+      const payload = await this.signedRequest<JsonObject>('GET', '/api/v1/position', INSTRUCTIONS.positionQuery, { symbol });
+      const netQuantity = Number(payload.netQuantity ?? payload.quantity ?? payload.positionQty ?? 0);
+      const entryPrice = Number(payload.entryPrice ?? payload.averageEntryPrice ?? 0);
+      const unrealizedPnl = Number(payload.unrealizedPnl ?? payload.pnl ?? 0);
+      return { symbol, size: netQuantity, entryPrice, unrealizedPnl };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('404') && message.includes('RESOURCE_NOT_FOUND')) {
+        return { symbol, size: 0, entryPrice: 0, unrealizedPnl: 0 };
+      }
+      throw error;
+    }
   }
 
   async placeOrder(request: OrderRequest): Promise<Order> {
