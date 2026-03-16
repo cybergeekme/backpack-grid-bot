@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     domain::{OrderIntent, OrderSide, PlannerOutput},
@@ -17,7 +18,7 @@ pub struct OrderKey {
     pub post_only: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExistingOrder {
     pub order_id: String,
     pub client_order_id: String,

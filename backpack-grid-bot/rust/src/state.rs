@@ -1,6 +1,7 @@
 use crate::{execution::ExistingOrder, reconcile::SyntheticFill, Position};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct RuntimeState {
     pub working_orders: Vec<ExistingOrder>,
     pub recent_fills: Vec<SyntheticFill>,

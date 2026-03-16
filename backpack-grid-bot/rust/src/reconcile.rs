@@ -1,11 +1,12 @@
 use rust_decimal::{prelude::Signed, Decimal};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     execution::{ExistingOrder, ReconciliationDiff},
     OrderIntent, OrderSide, Position,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FillSource {
     AdapterEvent,
     ReconciliationFallback,
@@ -21,7 +22,7 @@ pub struct FillMetrics {
     pub opening_fill: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyntheticFill {
     pub source: FillSource,
     pub symbol: String,

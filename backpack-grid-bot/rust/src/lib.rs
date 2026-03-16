@@ -6,6 +6,8 @@ pub mod planner;
 pub mod precision;
 pub mod reconcile;
 pub mod risk;
+pub mod runtime;
+pub mod persistence;
 pub mod service;
 pub mod state;
 
@@ -16,5 +18,7 @@ pub use planner::GridPlanner;
 pub use precision::{normalize_order_qty, normalize_position_size, order_precision_decimals, price_precision_decimals};
 pub use reconcile::{FillMetrics, FillSource, ReconcileEngine, ReconcileOutcome, ReconcileSnapshot, SyntheticFill};
 pub use risk::RiskEngine;
+pub use runtime::ShadowRuntime;
+pub use persistence::{JsonFilePersistence, RuntimeCheckpoint};
 pub use service::{GridBotService, ServiceCycleOutput};
 pub use state::{InMemoryStateStore, RuntimeState};
