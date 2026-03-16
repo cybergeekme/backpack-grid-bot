@@ -1,9 +1,9 @@
-use std::{fs, path::PathBuf};
+use std::{fs, io::Write, path::PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::{observability::ShadowReport, RuntimeState, ServiceCycleOutput};
+use crate::{observability::ShadowReport, RuntimeEvent, RuntimeState, ServiceCycleOutput};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeCheckpoint {
@@ -15,20 +15,34 @@ pub struct RuntimeCheckpoint {
     pub saved_at_unix_ms: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventJournalRecord {
+    pub symbol: String,
+    pub recorded_at_unix_ms: i64,
+    pub mark_price: String,
+    pub service_state: String,
+    pub pause_reason: Option<String>,
+    pub event: RuntimeEvent,
+}
+
 #[derive(Debug, Clone)]
 pub struct JsonFilePersistence {
     path: PathBuf,
     report_path: PathBuf,
+    event_journal_path: PathBuf,
 }
 
 impl JsonFilePersistence {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let report_path = path
-            .parent()
-            .map(|p| p.join("shadow-report.json"))
-            .unwrap_or_else(|| PathBuf::from("shadow-report.json"));
-        Self { path, report_path }
+        let parent = path.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+        let report_path = parent.join("shadow-report.json");
+        let event_journal_path = parent.join("events.jsonl");
+        Self {
+            path,
+            report_path,
+            event_journal_path,
+        }
     }
 
     pub fn from_env() -> Self {
@@ -78,12 +92,48 @@ impl JsonFilePersistence {
         Ok(())
     }
 
+    pub fn append_events(&self, cycle: &ServiceCycleOutput, symbol: &str) -> Result<usize> {
+        if cycle.events.is_empty() {
+            return Ok(0);
+        }
+        if let Some(parent) = self.event_journal_path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create event journal dir {}", parent.display()))?;
+        }
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.event_journal_path)
+            .with_context(|| format!("open event journal {}", self.event_journal_path.display()))?;
+        let recorded_at_unix_ms = now_unix_ms();
+        let mark_price = cycle.state.last_mid_price.unwrap_or_default().to_string();
+        let service_state = format!("{:?}", cycle.state.health.service_state);
+        let pause_reason = cycle.state.health.pause_reason.map(|reason| format!("{:?}", reason));
+
+        for event in &cycle.events {
+            let record = EventJournalRecord {
+                symbol: symbol.to_string(),
+                recorded_at_unix_ms,
+                mark_price: mark_price.clone(),
+                service_state: service_state.clone(),
+                pause_reason: pause_reason.clone(),
+                event: event.clone(),
+            };
+            let line = serde_json::to_string(&record)?;
+            writeln!(file, "{line}")?;
+        }
+        Ok(cycle.events.len())
+    }
+
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
 
     pub fn report_path(&self) -> &PathBuf {
         &self.report_path
+    }
+
+    pub fn event_journal_path(&self) -> &PathBuf {
+        &self.event_journal_path
     }
 }
 
@@ -104,11 +154,8 @@ mod tests {
         RuntimeState,
     };
 
-    #[test]
-    fn saves_and_loads_checkpoint() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = JsonFilePersistence::new(dir.path().join("state.json"));
-        let cycle = ServiceCycleOutput {
+    fn sample_cycle() -> ServiceCycleOutput {
+        ServiceCycleOutput {
             planner: PlannerOutput {
                 active_levels: vec![],
                 desired_orders: vec![],
@@ -117,7 +164,7 @@ mod tests {
             },
             execution: ExecutionPlan::default(),
             reconciliation: ReconcileOutcome::default(),
-            events: vec![],
+            events: vec![crate::RuntimeEvent::service_state_changed(crate::ServiceState::Active, "active")],
             state: RuntimeState {
                 working_orders: vec![],
                 recent_fills: vec![],
@@ -131,11 +178,32 @@ mod tests {
                 last_mid_price: Some(dec!(2260.4)),
                 health: RuntimeHealth::default(),
             },
-        };
+        }
+    }
+
+    #[test]
+    fn saves_and_loads_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = JsonFilePersistence::new(dir.path().join("state.json"));
+        let cycle = sample_cycle();
 
         store.save_cycle(&cycle, "ETH_USDC_PERP").unwrap();
         let loaded = store.load_checkpoint().unwrap().unwrap();
         assert_eq!(loaded.symbol, "ETH_USDC_PERP");
         assert_eq!(loaded.state.position.unwrap().size, dec!(-0.003));
+    }
+
+    #[test]
+    fn appends_event_journal_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = JsonFilePersistence::new(dir.path().join("state.json"));
+        let cycle = sample_cycle();
+
+        let written = store.append_events(&cycle, "ETH_USDC_PERP").unwrap();
+        assert_eq!(written, 1);
+
+        let body = fs::read_to_string(store.event_journal_path()).unwrap();
+        assert!(body.contains("ETH_USDC_PERP"));
+        assert!(body.contains("service_state_changed"));
     }
 }
