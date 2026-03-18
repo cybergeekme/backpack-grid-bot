@@ -1,21 +1,20 @@
 [package]
 name = "backpack-grid-bot"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Rust rewrite of a production-oriented Backpack futures short-only grid bot"
+description = "Minimal production-focused Backpack grid bot in Rust"
 license = "UNLICENSED"
 publish = false
 
 [dependencies]
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde", "clock"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["rand_core"] }
+hex = "0.4"
+md5 = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rust_decimal = { version = "1", features = ["serde"] }
-rust_decimal_macros = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-anyhow = "1"
-tracing = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-
-[dev-dependencies]
-pretty_assertions = "1"
-tempfile = "3"
