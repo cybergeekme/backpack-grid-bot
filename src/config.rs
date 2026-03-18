@@ -53,6 +53,8 @@ impl Config {
             cycles_path: parent.join("cycles.jsonl"),
             state_path,
             live_enabled: parse_bool("BACKPACK_ENABLE_LIVE", false),
+            ws_enabled: parse_bool("BACKPACK_ENABLE_WS", true),
+            ws_url: env::var("BACKPACK_WS_URL").ok().filter(|v| !v.trim().is_empty()),
             api_base_url: env::var("BACKPACK_API_BASE_URL").unwrap_or_else(|_| "https://api.backpack.exchange".to_string()),
             api_key: env::var("BACKPACK_API_KEY").unwrap_or_default(),
             api_secret: env::var("BACKPACK_API_SECRET").unwrap_or_default(),

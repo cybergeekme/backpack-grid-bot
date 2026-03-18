@@ -4,6 +4,7 @@ mod config;
 mod model;
 mod persist;
 mod strategy;
+mod ws;
 
 use anyhow::Result;
 

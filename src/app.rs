@@ -4,22 +4,36 @@ use anyhow::Result;
 use chrono::Utc;
 
 use crate::{
-    backpack::BackpackClient,
+    backpack::{BackpackClient, SyncResult},
     config::Config,
-    model::CycleReport,
-    persist,
-    strategy,
+    model::{CycleReport, OpenOrder, Position},
+    persist, strategy,
+    ws::{self, BackpackWsHandle, WsEvent},
 };
 
 pub struct App {
     config: Config,
     client: BackpackClient,
+    ws: Option<BackpackWsHandle>,
+    cached_mark_price: Option<rust_decimal::Decimal>,
+    cached_position: Option<Position>,
+    cached_orders: Option<Vec<OpenOrder>>,
+    rest_cycle_counter: u64,
 }
 
 impl App {
     pub fn new(config: Config) -> Result<Self> {
         let client = BackpackClient::new(&config)?;
-        Ok(Self { config, client })
+        let ws = ws::spawn(&config).ok();
+        Ok(Self {
+            config,
+            client,
+            ws,
+            cached_mark_price: None,
+            cached_position: None,
+            cached_orders: None,
+            rest_cycle_counter: 0,
+        })
     }
 
     pub fn run(&mut self) -> Result<()> {
@@ -33,12 +47,37 @@ impl App {
     }
 
     fn run_cycle(&mut self) -> Result<()> {
-        let mark_price = self.client.fetch_mark_price(&self.config.symbol)?;
-        let position = self.client.fetch_position(&self.config.symbol)?;
-        let existing = self.client.fetch_open_orders(&self.config.symbol)?;
+        self.ingest_ws_events()?;
+
+        let do_rest_refresh = self.rest_cycle_counter == 0 || self.rest_cycle_counter % 4 == 0;
+        let mark_price = if do_rest_refresh || self.cached_mark_price.is_none() {
+            let value = self.client.fetch_mark_price(&self.config.symbol)?;
+            self.cached_mark_price = Some(value);
+            value
+        } else {
+            self.cached_mark_price.expect("mark price cached")
+        };
+
+        let position = if do_rest_refresh || self.cached_position.is_none() {
+            let value = self.client.fetch_position(&self.config.symbol)?;
+            self.cached_position = Some(value.clone());
+            value
+        } else {
+            self.cached_position.clone().expect("position cached")
+        };
+
+        let existing = if do_rest_refresh || self.cached_orders.is_none() {
+            let value = self.client.fetch_open_orders(&self.config.symbol)?;
+            self.cached_orders = Some(value.clone());
+            value
+        } else {
+            self.cached_orders.clone().expect("orders cached")
+        };
+        self.rest_cycle_counter = self.rest_cycle_counter.saturating_add(1);
+
         let (desired, paused, pause_reason, mut issues) = strategy::build_orders(&self.config, mark_price, &position);
         let sync = if paused {
-            crate::backpack::SyncResult {
+            SyncResult {
                 final_orders: existing.clone(),
                 place_orders: Vec::new(),
                 cancel_orders: Vec::new(),
@@ -47,11 +86,13 @@ impl App {
         } else {
             self.client.sync_orders(&self.config.symbol, &desired, &existing)?
         };
+        self.cached_orders = Some(sync.final_orders.clone());
 
-        if self.config.live_enabled {
-            persist::info(&self.config.events_path, "cycle executed in live mode")?;
+        persist::info(&self.config.events_path, if self.config.live_enabled { "cycle executed in live mode" } else { "cycle executed in dry-run mode" })?;
+        if self.ws.is_some() {
+            persist::info(&self.config.events_path, "ws enabled with rest reconciliation fallback")?;
         } else {
-            persist::info(&self.config.events_path, "cycle executed in dry-run mode")?;
+            persist::info(&self.config.events_path, "ws unavailable, rest only mode")?;
         }
         if paused {
             persist::info(&self.config.events_path, pause_reason.as_deref().unwrap_or("paused"))?;
@@ -94,6 +135,28 @@ impl App {
             report.matched_orders,
             report.paused,
         );
+        Ok(())
+    }
+
+    fn ingest_ws_events(&mut self) -> Result<()> {
+        let Some(ws) = &self.ws else { return Ok(()); };
+        for event in ws.poll_latest() {
+            match event {
+                WsEvent::Snapshot(snapshot) => {
+                    if let Some(mark) = snapshot.mark_price {
+                        self.cached_mark_price = Some(mark);
+                    }
+                    if let Some(position) = snapshot.position {
+                        self.cached_position = Some(position);
+                    }
+                    if let Some(orders) = snapshot.open_orders {
+                        self.cached_orders = Some(orders);
+                    }
+                }
+                WsEvent::Info(msg) => persist::info(&self.config.events_path, &msg)?,
+                WsEvent::Error(msg) => persist::info(&self.config.events_path, &msg)?,
+            }
+        }
         Ok(())
     }
 }
