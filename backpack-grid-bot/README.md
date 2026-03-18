@@ -1,186 +1,102 @@
-# Backpack Futures Grid v1 Skeleton
+# backpack-grid-bot v2
 
-A production-oriented TypeScript skeleton for a futures grid trading service.
+Rust rewrite of the Backpack futures grid bot.
 
-## What it includes
+Goal: simple, production-usable, short-only first, dry-run by default, with the safety lessons from the TypeScript production validation carried over.
 
-- Exchange adapter contract
-- Safe Backpack adapter stub (REST + WebSocket scaffolding)
-- Typed Backpack WebSocket client for public/private subscription handling
-- Mock exchange adapter for local simulation
-- Risk engine
-- Grid strategy engine
-- OMS / order manager
-- Basic REST-vs-desired order reconciliation
-- SQLite persistence with WAL mode and schema initialization
-- Restart recovery for strategy snapshot, working orders, recent fills, position, and service checkpoints
-- Mock/demo adapter checkpoint restore so local restarts keep simulated state
-- Runnable mock demo simulation
-- Real long-running `service` mode with conservative safety states
-- Basic tests
-- systemd deployment example
+## What this version is
 
-## Safety
+- Rust-first runtime under `rust/`
+- read-only / shadow mode by default
+- deterministic grid planning with decimal math
+- restart checkpoint persistence
+- append-only event and cycle journals
+- reconciliation-based mismatch detection
+- synthetic fill inference when exchange events are missing
+- kill-switch and configured price-range pause guards
+- short-only protection against flipping net long
 
-- The demo and service both use only a mock exchange by default.
-- Backpack trading mode is opt-in: `GRID_USE_BACKPACK=true` with `BACKPACK_ENABLE_LIVE=false` now runs in true read-only mode; set `BACKPACK_ENABLE_LIVE=true` only to allow order mutations.
-- Service mode has explicit health states: `STARTING`, `ACTIVE`, `DEGRADED`, `PAUSED`, `SAFE_MODE`, `STOPPED`.
-- Out-of-range price moves pause grid placement instead of blindly chasing price.
-- Consecutive loop failures trip a circuit breaker into `SAFE_MODE`; reconciliation continues but new rebalances stop.
-- Periodic REST reconciliation refreshes orders/position even while paused or degraded.
-- Optional Telegram alerting can page operators for lifecycle/state changes, circuit breaker trips, out-of-range pauses, reconciliation mismatches, and fills.
-- Fill alerts now support enriched Telegram output (`fee`, `realizedPnl`, `positionAfter`, `entryPriceAfter`, `closedQty`, `openingFill`) and normalize display precision so alert payloads do not leak JavaScript floating-point artifacts like `0.002999999999999999`.
-- If live Backpack order/fill events are missing, reconciliation can emit a synthetic `Order filled (reconciled)` fallback alert inferred from position/order-set changes; these alerts are explicitly marked with `source: reconciliation_fallback` and currently use `fee: 0` when the exchange did not provide a real fill event.
-- Read-only reconciliation logging is now deduplicated so validation runs do not spam identical warnings every loop.
-- WebSocket connection attempts inherit the same live-trading safety gate and degrade back to REST-only if WS connect fails.
-- Backpack integration currently covers authenticated REST calls for balances, collateral/equity lookup, open orders, single-position lookup, order placement/cancel, public mark prices, and typed WS normalization scaffolding for order/position/fill updates.
-- Persistence now covers local runtime snapshots and checkpoints, but live-trading replay logic after partial exchange disconnects is still incomplete.
+## What this version is not
 
-## Quick start
+- not a sprawling framework
+- not dependent on WebSocket correctness to stay safe
+- not live by default
 
-```bash
-npm install
-npm run test
-npm run build
-npm run demo
-GRID_SERVICE_DRY_RUN_MS=45000 npm run service
-```
+The TS implementation remains the behavior reference in git history. The v2 branch runtime target is the Rust service.
 
-## Environment
+## Production behaviors carried over from prior incidents
 
-Use `.env.example` for local development, and `deploy/backpack-grid-bot.env.example` as the template for `/etc/backpack-grid-bot/backpack-grid-bot.env` in production.
+- `short_only` is for a clean account context or an already-short account, not for adopting an oversized unrelated short.
+- `GRID_MAX_POSITION_ABS` is the hard cap. More balance does not override it.
+- reduce-only buys are only valid when a short already exists.
+- order / position drift must be visible in journals and reports instead of being silently ignored.
+- missing exchange fill events are handled by reconciliation fallback inference.
+- decimal normalization is mandatory so tiny precision noise does not create bogus diffs.
+- the process must fail safe: dry-run first, explicit opt-in before any future live mutation path.
 
-Optional:
+## Layout
 
-- `GRID_SYMBOL` (default: `ETH_USDC_PERP`)
-- `GRID_LEVELS` (default: `3`)
-- `GRID_SPACING_BPS` (default: `50`) for the legacy symmetric grid mode
-- `GRID_ORDER_SIZE` (default: `0.01` in the template; for new live validation, start much smaller and size it relative to `GRID_MAX_POSITION_ABS`)
-- `GRID_MAX_POSITION_ABS` (default: `0.05`)
-- `GRID_MODE=neutral|short_bias|short_only` (default: `neutral`)
-- `GRID_ACTIVE_LEVELS=3` keeps only the nearest levels live instead of hanging the entire theoretical grid at once
-- `GRID_SHORT_BIAS_SELL_RATIO=3` makes `short_bias` mode keep roughly 3x as many sell levels as buy levels inside the active window
-- `GRID_MIN_PRICE` / `GRID_MAX_PRICE` optionally define a full bounded price range; when both are set, the engine distributes `GRID_LEVELS` across the range and classifies each level relative to the current mid price
-- `GRID_LEVERAGE=1` stores the intended leverage in config, validates it against Backpack account `leverageLimit` at startup, and logs an explicit warning that the currently applied per-market leverage still needs to be set manually on the exchange side
-- `GRID_KILL_SWITCH=true` to force strategy shutdown
-- `GRID_USE_BACKPACK=true` to switch from mock exchange to Backpack REST adapter
-  - With `BACKPACK_ENABLE_LIVE=false`, the adapter runs in read-only mode: connect, fetch time/mark price, and perform signed reads like balance/open-orders/position, but never place/cancel orders.
-  - With `BACKPACK_ENABLE_LIVE=true`, the same adapter is allowed to mutate orders.
-- `GRID_DB_PATH=./var/backpack-grid-bot.sqlite` SQLite database path for persistent state
-- `GRID_SERVICE_NAME=backpack-grid-bot` logical service name used to partition persisted rows
-- `GRID_SERVICE_LOOP_MS=15000` main service loop interval
-- `GRID_SERVICE_RECONCILE_MS=60000` periodic REST reconciliation interval
-- `GRID_SERVICE_ERROR_THRESHOLD=3` consecutive loop errors before SAFE_MODE
-- `GRID_SERVICE_OUT_OF_RANGE_BPS=75` pause buffer beyond the last active grid before new orders are suppressed
-- `GRID_SERVICE_DRY_RUN_MS=0` optional auto-stop timer for service dry runs
-- `GRID_MOCK_PRICE_STEP=100` mock-service price step used only in mock service mode
-- `TELEGRAM_ALERTS_ENABLED=true` enable Telegram operator alerts
-- `TELEGRAM_BOT_TOKEN=<bot token>` Telegram Bot API token
-- `TELEGRAM_CHAT_ID=<chat id>` Telegram target chat/channel/user id
-- `TELEGRAM_ALERT_LEVEL=warn` minimum severity to send: `info`, `warn`, `critical`
-- `TELEGRAM_ALERT_DEDUP_MS=300000` per-alert dedup window in milliseconds
-- `TELEGRAM_NOTIFY_FILLS=false` set true to send fill notifications in addition to safety alerts
-- `TELEGRAM_NOTIFY_ORDER_EVENTS=false` set true to push every order status update (`new`/`open`/`cancelled`/`rejected`/etc.) to the Telegram alert bot; this is intentionally noisy and disables dedup for those order-event alerts
-- `BACKPACK_ENABLE_LIVE=false` keeps Backpack in read-only mode; `true` enables order placement/cancel mutations
-- `BACKPACK_ENABLE_WS=true` to enable the Backpack WS client when live mode is enabled (default: true)
-- `BACKPACK_API_KEY=<base64 public key>`
-- `BACKPACK_API_SECRET=<base64 ed25519 seed>`
-  - These are still required for Backpack signed reads (`getBalance`, `getOpenOrders`, `getPosition`) even in read-only mode.
-- `BACKPACK_WINDOW_MS=5000`
-- `BACKPACK_WS_URL=wss://ws.backpack.exchange` to override the default endpoint while testing
+- `rust/` — Rust runtime
+- `deploy/backpack-grid-bot.service` — systemd unit
+- `deploy/backpack-grid-bot.env.example` — production env template
+- `deploy/install-prod.sh` — install/update helper
 
-## Persistence model
-
-The service now stores the following in SQLite:
-
-- strategy snapshots
-- working/open order state
-- fills
-- reconciliation events
-- risk rejection events
-- service checkpoints, including a compact runtime checkpoint payload
-
-On startup, the service loads the latest persisted runtime checkpoint and restores:
-
-- latest strategy snapshot
-- latest position
-- latest working orders
-- recent fills
-- mock adapter internals in demo mode
-
-SQLite is opened in WAL mode with `synchronous=NORMAL` for a decent durability/latency trade-off on a single-host service. Runtime checkpoints are intentionally compact now: they keep snapshot/position metadata plus a bounded adapter checkpoint, while working orders and fills continue to persist in their dedicated tables. Service checkpoints are also pruned per kind so they cannot grow without bound during long-running sessions.
-
-## Deployment with systemd
-
-Example unit: `deploy/backpack-grid-bot.service`
-
-Suggested layout on Ubuntu 24.04:
+## Build
 
 ```bash
-sudo useradd --system --home /opt/backpack-grid-bot --shell /usr/sbin/nologin backpack-grid-bot
-sudo mkdir -p /opt/backpack-grid-bot /etc/backpack-grid-bot /var/lib/backpack-grid-bot
-sudo chown -R backpack-grid-bot:backpack-grid-bot /opt/backpack-grid-bot /var/lib/backpack-grid-bot
-
-# copy project files, then:
-cd /opt/backpack-grid-bot
-npm ci
-npm run build
-GRID_SERVICE_DRY_RUN_MS=45000 npm run service   # optional dry run before enabling the unit
-
-sudo cp deploy/backpack-grid-bot.service /etc/systemd/system/backpack-grid-bot.service
-sudo cp deploy/backpack-grid-bot.env.example /etc/backpack-grid-bot/backpack-grid-bot.env
-sudo chmod 600 /etc/backpack-grid-bot/backpack-grid-bot.env
-sudo ${EDITOR:-vi} /etc/backpack-grid-bot/backpack-grid-bot.env
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now backpack-grid-bot.service
-sudo systemctl status backpack-grid-bot.service
+cd rust
+cargo test
+cargo build --release
 ```
 
-Notes:
+## Run once
 
-- The included unit uses `StateDirectory=backpack-grid-bot` and writes the SQLite DB under `/var/lib/backpack-grid-bot`.
-- The `service` entrypoint is the intended long-running mode; use `GRID_SERVICE_DRY_RUN_MS` for supervised smoke tests.
-- Telegram alert delivery is fire-and-forget; send failures are logged but do not stop the trading loop.
-- If `TELEGRAM_ALERTS_ENABLED=true` but token/chat id are missing or wrong, alerts will be skipped or logged as delivery failures rather than crashing the service.
-- If you enable live mode, keep the env file readable only by root and the service account.
-- Treat `SAFE_MODE` and repeated `PAUSED` logs as operator-review conditions, not something to auto-ignore.
+```bash
+cd rust
+GRID_RUN_ONCE=true cargo run --release
+```
 
-## Backpack notes
+## Run loop
 
-This project follows Backpack's ED25519 signing model and current REST/WS surface documented at <https://docs.backpack.exchange/>. The adapter currently targets:
+```bash
+cd rust
+GRID_RUN_ONCE=false cargo run --release
+```
 
-- `GET /api/v1/time`
-- `GET /api/v1/markPrices`
-- `GET /api/v1/capital`
-- `GET /api/v1/capital/collateral`
-- `GET /api/v1/orders`
-- `GET /api/v1/position`
-- `POST /api/v1/order`
-- `DELETE /api/v1/order`
-- WebSocket subscribe scaffolding for mark prices, orders, and positions
+Default output is written under `runtime/` unless overridden:
 
-Before using with real funds, you should still add:
+- `runtime/state.json`
+- `runtime/shadow-report.json`
+- `runtime/events.jsonl`
+- `runtime/cycles.jsonl`
 
-- validated Backpack WS auth/subscribe payloads against a live account capture
-- reconnect/backoff and ping/pong supervision
-- sequence-aware replay + REST catch-up after disconnects
-- stronger response validation against live payloads
-- additional alert sinks (Discord/PagerDuty/etc.) if Telegram alone is not enough for operations
-- cancel-on-pause / flatten-on-safe-mode policies after live validation proves the right behavior
-- sandbox/small-size validation against your Backpack subaccount
+## Required env
 
-## Live short-only operator notes
+- `GRID_SYMBOL` default `ETH_USDC_PERP`
+- `GRID_LEVELS`
+- `GRID_SPACING_BPS`
+- `GRID_ORDER_SIZE`
+- `GRID_MAX_POSITION_ABS`
+- `GRID_MODE=short_only` recommended for production
+- `GRID_ACTIVE_LEVELS`
+- `GRID_MIN_PRICE` / `GRID_MAX_PRICE` optional hard bounds
+- `GRID_KILL_SWITCH=true` to force pause
+- `BACKPACK_API_KEY`
+- `BACKPACK_API_SECRET`
+- `BACKPACK_API_BASE_URL` optional, default `https://api.backpack.exchange`
+- `GRID_RUNTIME_STATE_PATH` optional, default `runtime/state.json`
+- `GRID_SHADOW_INTERVAL_MS` optional, default `15000`
 
-These were learned during production validation and are worth keeping in the repo docs instead of only in chat history.
+## Production flow
 
-- `short_only` is intended to run on a clean account context (empty account or an account that already holds a short), not to "adopt" a large unrelated position.
-- The hard safety boundary is `GRID_MAX_POSITION_ABS`; adding more balance does **not** make it safe to attach this bot to an already-open short that is many times larger than the configured max position.
-- Under `short_only`, the service should:
-  - place maker `sell` orders to open/add short exposure
-  - place `reduceOnly=true` maker `buy` orders only when a short position already exists
-  - reject any order path that would flip net position positive via `short_only_long_flip_blocked`
-- When `GRID_ORDER_SIZE` is increased, re-check it against `GRID_MAX_POSITION_ABS`. For example, with `GRID_ORDER_SIZE=0.005` and `GRID_MAX_POSITION_ABS=0.02`, only four sell levels can fit before `max_position_breached` blocks additional exposure.
-- Backpack live order placement currently requires a numeric `clientId` (`uint32`) at the exchange API boundary even though the service still tracks a string `clientOrderId` internally.
-- For futures equity / available margin checks, prefer Backpack collateral data (`GET /api/v1/capital/collateral`) rather than relying only on `GET /api/v1/capital`.
-- If you need to operate a different Backpack subaccount, the cleanest current approach is to switch the production API key/secret to that subaccount's credentials; explicit `subaccountId` routing is not yet wired through the live production config.
+1. configure env
+2. run once in read-only mode and inspect `shadow-report.json`
+3. run the service under systemd
+4. watch `events.jsonl` and `cycles.jsonl`
+5. only after repeated clean shadow cycles should you consider adding a real execution adapter
+
+## Current execution mode
+
+This branch currently executes in `DryRun` mode only. That is intentional: production-safe observation first, mutation later only after explicit validation.
+
+If you want, the next step after this branch is to wire a live execution adapter behind an explicit safety gate instead of replacing the current safe default.

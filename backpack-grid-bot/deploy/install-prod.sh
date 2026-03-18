@@ -14,28 +14,30 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   exit 1
 fi
 
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "cargo not found. Install Rust first: https://rustup.rs/"
+  exit 1
+fi
+
 if ! id -u "$APP_USER" >/dev/null 2>&1; then
   useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
 fi
 
-mkdir -p "$APP_DIR" "$ETC_DIR" "$DATA_DIR"
+mkdir -p "$APP_DIR" "$ETC_DIR" "$DATA_DIR/runtime"
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$DATA_DIR"
 
-if [[ ! -d "$WORKSPACE_DIR" ]]; then
-  echo "Workspace project not found: $WORKSPACE_DIR"
+if [[ ! -d "$WORKSPACE_DIR/rust" ]]; then
+  echo "Workspace project not found: $WORKSPACE_DIR/rust"
   exit 1
 fi
 
 rsync -a --delete \
-  --exclude node_modules \
-  --exclude dist \
+  --exclude target \
   --exclude .env \
-  --exclude var \
   "$WORKSPACE_DIR/" "$APP_DIR/"
 
-cd "$APP_DIR"
-npm install
-npm run build
+cd "$APP_DIR/rust"
+cargo build --release
 
 if [[ ! -f "$ETC_DIR/backpack-grid-bot.env" ]]; then
   cp "$APP_DIR/deploy/backpack-grid-bot.env.example" "$ETC_DIR/backpack-grid-bot.env"
