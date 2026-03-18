@@ -1,29 +1,27 @@
 [Unit]
-Description=Backpack Grid Trading Service
+Description=Backpack Grid Bot v2
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/backpack-grid-bot
-Environment=NODE_ENV=production
-Environment=GRID_DB_PATH=/var/lib/backpack-grid-bot/backpack-grid-bot.sqlite
-Environment=GRID_SERVICE_NAME=backpack-grid-bot-prod
-# Put secrets and operator alert routing in /etc/backpack-grid-bot/backpack-grid-bot.env,
-# e.g. TELEGRAM_ALERTS_ENABLED / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID.
-EnvironmentFile=-/etc/backpack-grid-bot/backpack-grid-bot.env
-ExecStart=/usr/bin/node /opt/backpack-grid-bot/dist/index.js service
-Restart=on-failure
-RestartSec=5
 User=backpack-grid-bot
 Group=backpack-grid-bot
+WorkingDirectory=/opt/backpack-grid-bot
+Environment=GRID_RUN_ONCE=false
+Environment=GRID_RUNTIME_STATE_PATH=/var/lib/backpack-grid-bot/runtime/state.json
+Environment=GRID_SHADOW_INTERVAL_MS=15000
+EnvironmentFile=-/etc/backpack-grid-bot/backpack-grid-bot.env
+ExecStart=/opt/backpack-grid-bot/target/release/backpack-grid-bot
+Restart=on-failure
+RestartSec=5
 UMask=007
-StateDirectory=backpack-grid-bot
-ReadWritePaths=/var/lib/backpack-grid-bot
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+StateDirectory=backpack-grid-bot
+ReadWritePaths=/var/lib/backpack-grid-bot
 
 [Install]
 WantedBy=multi-user.target
